@@ -51,3 +51,19 @@ create table if not exists match_questions (
   points integer not null default 0,
   primary key (match_id, position)
 );
+
+create table if not exists budget_rounds (
+  id uuid primary key default gen_random_uuid(),
+  round_number bigint generated always as identity,
+  session_id uuid not null references sessions (id) on delete cascade,
+  player_name text not null,
+  config jsonb not null,
+  allocations jsonb not null,
+  draft_version bigint not null default 0,
+  confirmed_at timestamptz
+);
+
+create index if not exists budget_rounds_session on budget_rounds (session_id, round_number desc);
+
+create unique index if not exists budget_rounds_active on budget_rounds (session_id)
+  where confirmed_at is null;

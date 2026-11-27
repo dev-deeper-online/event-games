@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BudgetView } from "@/components/budget-view";
 import { QuizMatch, StartMatch } from "@/components/quiz-view";
 import { gameLabels, playerSlots, roleLabels, type Snapshot } from "@/lib/protocol";
 import { useStation, type Send, type Station } from "@/lib/use-station";
@@ -34,7 +35,7 @@ export function StationView({ code, role }: { code: string; role: string }) {
       </p>
       {snapshot ? (
         // Offline, this device cannot know who else is still connected.
-        <Session snapshot={snapshot} present={connection === "connected" ? present : null} send={send} />
+        <Session snapshot={snapshot} present={connection === "connected" ? present : null} send={send} connection={connection} />
       ) : (
         <p>Loading the session…</p>
       )}
@@ -42,7 +43,12 @@ export function StationView({ code, role }: { code: string; role: string }) {
   );
 }
 
-function Session({ snapshot, present, send }: { snapshot: Snapshot; present: Station["present"]; send: Send }) {
+function Session({ snapshot, present, send, connection }: {
+  snapshot: Snapshot;
+  present: Station["present"];
+  send: Send;
+  connection: Station["connection"];
+}) {
   const { role, match } = snapshot;
   const running = match !== null && match.phase !== "complete";
   const staff = role === "operator" || role === "display";
@@ -75,7 +81,8 @@ function Session({ snapshot, present, send }: { snapshot: Snapshot; present: Sta
           {staff && <Devices seats={snapshot.seats} present={present} />}
         </>
       )}
-      {!staff && !running && <p>You are in. Wait for the operator to start.</p>}
+      {snapshot.gameType === "budget" && <BudgetView snapshot={snapshot} send={send} connection={connection} />}
+      {snapshot.gameType === "quiz" && !staff && !running && <p>You are in. Wait for the operator to start.</p>}
     </>
   );
 }

@@ -1,3 +1,5 @@
+import type { BudgetRound } from "./budget-state";
+
 /** What the browser and the server both need to agree on. */
 
 export const gameTypes = ["quiz", "budget"] as const;
@@ -30,6 +32,7 @@ export type Snapshot = {
   code: string;
   gameType: GameType;
   role: Role;
+  budgetRound: BudgetRound | null;
   seats: { role: Role; deviceIds: string[] }[];
   /** The quiz station's running or last finished match. */
   match: Match | null;
