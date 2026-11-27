@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
 import { postJson } from "@/lib/api-client";
-import { joinableRoles, normalizeCode, roleLabels, tokenKey } from "@/lib/protocol";
+import { normalizeCode, tokenKey } from "@/lib/protocol/device";
+import { joinableRoles, roleLabels, type JoinableRole } from "@/lib/protocol/roles";
 
 // getRandomValues also works on a plain http address, where randomUUID does not.
 const newDeviceToken = () =>
@@ -18,7 +19,8 @@ export function JoinForm() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const code = normalizeCode(String(form.get("code")));
-    const role = String(form.get("role"));
+    // The required radio buttons offer only these.
+    const role = form.get("role") as JoinableRole;
     setError("");
     // Stays pending until the station page is showing, so a second tap cannot join twice.
     startJoining(async () => {

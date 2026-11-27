@@ -1,5 +1,5 @@
 import { createHttpClient, type PubSubHttpClient } from "@ably/pubsub-server";
-import { budgetResultsChannel, channelName, isQuizDisplay, leaderboardChannel } from "./protocol";
+import { budgetResultsChannel, channelName, eventChannelFor, leaderboardChannel } from "./protocol/channels";
 import type { Device } from "./sessions";
 
 let client: PubSubHttpClient | undefined;
@@ -10,16 +10,16 @@ const ably = () => {
   return (client ??= createHttpClient({ key: process.env.ABLY_API_KEY }));
 };
 
-/** Event-wide subscriptions depend on the game and device role. */
-export const tokenRequestFor = (device: Device) =>
-  ably().auth.createTokenRequest({
+export const tokenRequestFor = (device: Device) => {
+  const eventChannel = eventChannelFor(device);
+  return ably().auth.createTokenRequest({
     clientId: device.deviceId,
     capability: {
       [channelName(device.code)]: ["subscribe", "presence"],
-      ...(isQuizDisplay(device) ? { [leaderboardChannel]: ["subscribe"] } : {}),
-      ...(device.gameType === "budget" && { [budgetResultsChannel]: ["subscribe"] }),
+      ...(eventChannel && { [eventChannel]: ["subscribe"] }),
     },
   });
+};
 
 /** Ids of the devices connected to a session's live channel right now. */
 export async function presentDeviceIds(code: string) {

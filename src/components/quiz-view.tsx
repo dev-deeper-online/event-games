@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useTransition, type FormEvent } from "react";
-import { isPlayer, maxNameLength, playerSlots, roleLabels, type LeaderboardEntry, type Match, type Role } from "@/lib/protocol";
+import { isPlayer, maxNameLength, playerSlots, roleLabels, type Role } from "@/lib/protocol/roles";
+import type { LeaderboardEntry, Match } from "@/lib/protocol/snapshot";
 import type { Send } from "@/lib/use-station";
 
 /** Runs one command at a time, keeping the message from the last one that failed. */
@@ -122,7 +123,6 @@ function Choices({ match, send }: { match: Match; send: Send }) {
   const { run, pending, error } = useCommand(send);
   const open = match.phase === "open" && match.canAnswer;
   const retryId = match.phase === "open" ? match.retryId : undefined;
-  const answerUrl = retryId ? `/api/answer?retry=${encodeURIComponent(retryId)}` : "/api/answer";
 
   return (
     <>
@@ -132,7 +132,7 @@ function Choices({ match, send }: { match: Match; send: Send }) {
             key={index}
             type="button"
             disabled={!open || pending}
-            onClick={() => run(answerUrl, { matchId: match.id, question: match.question.number, choice: index })}
+            onClick={() => run("/api/answer", { matchId: match.id, question: match.question.number, choice: index, retryId })}
           >
             {choice}
           </button>

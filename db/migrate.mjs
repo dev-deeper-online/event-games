@@ -1,11 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import pg from "pg";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
 
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-const migrations = ["schema.sql", "002_quiz_retry.sql", "003_quiz_interruption.sql"];
+// Applied in name order, so each new file takes the next number.
+const migrations = readdirSync(new URL(".", import.meta.url)).filter((name) => name.endsWith(".sql")).sort();
 
 await client.connect();
 try {

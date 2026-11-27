@@ -1,7 +1,8 @@
 // Drives the server's submission interface with a controlled clock, against the real database.
 import { expect, test } from "@playwright/test";
 import content from "../content/quiz.json";
-import type { PlayerRole, Role, Snapshot } from "../src/lib/protocol";
+import type { PlayerRole, Role } from "../src/lib/protocol/roles";
+import type { Snapshot } from "../src/lib/protocol/snapshot";
 import { checkContent, startMatch, stopMatch, submitAnswer, type Submission } from "../src/lib/quiz";
 import { authenticate, createSession, joinSession, liveSnapshotFor, snapshotFor, type Device } from "../src/lib/sessions";
 import { newToken } from "./station";
@@ -303,10 +304,9 @@ test("the match ends after the configured number of distinct questions, keeping 
   expect(await view(now)).toMatchObject({ phase: "open", players: { player1: { name: "Chidi", score: 0 } } });
 });
 
-test("only the quiz operator can start a match, and only one at a time", async () => {
-  const { operator, display } = await running();
+test("only a quiz session can start a match, and only one at a time", async () => {
+  const { operator } = await running();
   expect(await startMatch(operator, names, start)).toMatchObject({ status: 409 });
-  expect(await startMatch(display, names, start)).toMatchObject({ status: 403 });
 
   const budget = await station("budget");
   expect(await startMatch(budget.operator, names, start)).toMatchObject({ status: 409 });

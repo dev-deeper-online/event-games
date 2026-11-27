@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { BudgetView } from "@/components/budget-view";
 import { QuizLeaderboard, QuizMatch, StartMatch, StopMatch } from "@/components/quiz-view";
-import { gameLabels, playerSlots, roleLabels, type Snapshot } from "@/lib/protocol";
+import { gameLabels, isPlayer, roleLabels, type Role } from "@/lib/protocol/roles";
+import type { Snapshot } from "@/lib/protocol/snapshot";
 import { useStation, type Send, type Station } from "@/lib/use-station";
 
 const connectionLabels: Record<Station["connection"], string> = {
@@ -13,20 +14,22 @@ const connectionLabels: Record<Station["connection"], string> = {
   failed: "Connection failed. Reload the page.",
 };
 
-export function StationView({ code, role }: { code: string; role: string }) {
+export function NotJoined() {
+  return (
+    <main>
+      <h1>This device has not joined</h1>
+      <p>Enter the session code to take a seat.</p>
+      <Link className="button" href="/">
+        Join with a code
+      </Link>
+    </main>
+  );
+}
+
+export function StationView({ code, role }: { code: string; role: Role }) {
   const { snapshot, present, connection, rejected, send } = useStation(code, role);
 
-  if (rejected) {
-    return (
-      <main>
-        <h1>This device has not joined</h1>
-        <p>Enter the session code to take a seat.</p>
-        <Link className="button" href="/">
-          Join with a code
-        </Link>
-      </main>
-    );
-  }
+  if (rejected) return <NotJoined />;
 
   return (
     <main>
@@ -55,7 +58,7 @@ function Session({ snapshot, present, send, connection }: {
   // The display gives the whole screen to a running match.
   const matchOnly = running && role === "display";
   const playersReady = snapshot.seats
-    .filter((seat) => (playerSlots[snapshot.gameType] as readonly string[]).includes(seat.role))
+    .filter((seat) => isPlayer(seat.role))
     .every((seat) => seat.deviceIds.some((id) => present?.has(id)));
 
   if (role === "display" && stopNotice) {

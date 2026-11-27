@@ -1,4 +1,4 @@
-import { gameTypes } from "@/lib/protocol";
+import { gameTypes } from "@/lib/protocol/roles";
 import { createSession } from "@/lib/sessions";
 
 export async function POST(request: Request) {
