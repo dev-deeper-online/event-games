@@ -55,7 +55,9 @@ test("the event ranks both players from each completed match and includes all ti
           new Request("http://test", { headers: { authorization: `Bearer ${playerToken}` } }),
         );
         if (!player) throw new Error("Could not authenticate the player");
-        expect(await submitAnswer(player, { matchId: running.id, question: 1, choice: 1 }, Date.now()))
+        const { match } = await snapshotFor(player);
+        if (match?.phase !== "open") throw new Error("Expected an open question");
+        expect(await submitAnswer(player, { matchId: running.id, question: 1, choice: 1, retryId: match.retryId }, Date.now()))
           .toEqual({ completed: role === "player2" });
       }
 
