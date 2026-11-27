@@ -3,7 +3,7 @@
 import { createClient, type PubSubClient } from "@ably/pubsub-device";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postJson } from "./api-client";
-import { channelName, isQuizDisplay, leaderboardChannel, tokenKey, type Snapshot } from "./protocol";
+import { budgetResultsChannel, channelName, isQuizDisplay, leaderboardChannel, tokenKey, type Snapshot } from "./protocol";
 
 export type Station = {
   snapshot: Snapshot | null;
@@ -33,7 +33,7 @@ export function useStation(code: string, role: string): Station & { send: Send }
     let retry: ReturnType<typeof setTimeout> | undefined;
     let latest = 0;
     let stopped = false;
-    let watchingLeaderboard = false;
+    let watchingEventResults = false;
 
     const stop = () => {
       stopped = true;
@@ -59,12 +59,13 @@ export function useStation(code: string, role: string): Station & { send: Send }
         // Replies can arrive out of order; only the newest request may win.
         if (stopped || request !== latest) return;
         update({ snapshot });
-        if (!watchingLeaderboard && isQuizDisplay(snapshot) && realtime) {
-          watchingLeaderboard = true;
-          const leaderboard = realtime.channels.get(leaderboardChannel);
-          // Catch up if a completion happened before attachment or during a gap in delivery.
-          leaderboard.on(["attached", "update"], () => void refresh());
-          leaderboard.subscribe("changed", () => void refresh()).catch(console.error);
+        const eventChannel = snapshot.gameType === "budget" ? budgetResultsChannel
+          : isQuizDisplay(snapshot) ? leaderboardChannel : null;
+        if (eventChannel && realtime && !watchingEventResults) {
+          watchingEventResults = true;
+          const results = realtime.channels.get(eventChannel);
+          results.on(["attached", "update"], () => void refresh());
+          results.subscribe("changed", () => void refresh()).catch(console.error);
         }
         // Nothing is published when the pause ends, so each device asks again when the next question opens.
         if (snapshot.match?.phase === "closed") retry = setTimeout(refresh, snapshot.match.nextInMs);

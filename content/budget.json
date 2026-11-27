@@ -1,0 +1,5 @@
+{
+  "amount": 1000,
+  "step": 100,
+  "products": ["Headphones", "Portable speaker", "Power bank"]
+}

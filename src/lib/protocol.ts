@@ -1,3 +1,5 @@
+import type { BudgetRound } from "./budget-state";
+
 /** What the browser and the server both need to agree on. */
 
 export const gameTypes = ["quiz", "budget"] as const;
@@ -32,6 +34,7 @@ export type Snapshot = {
   code: string;
   gameType: GameType;
   role: Role;
+  budgetRound: BudgetRound | null;
   seats: { role: Role; deviceIds: string[] }[];
   /** The quiz station's running or last finished match. */
   match: Match | null;
@@ -53,7 +56,7 @@ export type Match = {
   questionCount: number;
   question: { number: number; prompt: string; choices: string[] };
 } & (
-  | { phase: "open"; canAnswer: boolean }
+  | { phase: "open"; canAnswer: boolean; retryId?: string }
   /** `nextInMs` is how long until the next question opens; devices fetch a snapshot then. */
   | { phase: "closed"; result: QuestionResult; nextInMs: number }
   | { phase: "complete"; result: QuestionResult }
@@ -67,6 +70,7 @@ export const normalizeCode = (code: string) => code.replace(/\s/g, "").toUpperCa
 export const leaderboardChannel = "event:quiz-leaderboard";
 
 export const channelName = (code: string) => `session:${code}`;
+export const budgetResultsChannel = "budget:results";
 
 /** Where a browser keeps its device token, so a reload keeps its seat. */
 export const tokenKey = (code: string, role: string) => `device:${code}:${role}`;

@@ -5,6 +5,7 @@ import { authenticate } from "@/lib/sessions";
 export async function POST(request: Request) {
   // Read the clock first: this is the arrival time the answer is scored on.
   const receivedAt = Date.now();
+  const retryId = new URL(request.url).searchParams.get("retry") ?? undefined;
   const device = await authenticate(request);
   if (!device) return Response.json({ error: "Unknown device." }, { status: 401 });
 
@@ -14,7 +15,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Send a match, a question number and a choice." }, { status: 400 });
   }
 
-  const result = await submitAnswer(device, { matchId, question, choice }, receivedAt);
+  const result = await submitAnswer(device, { matchId, question, choice, retryId }, receivedAt);
   if ("error" in result) return Response.json({ error: result.error }, { status: result.status });
 
   await Promise.all([publishChanged(device.code), result.completed && publishLeaderboardChanged()]);

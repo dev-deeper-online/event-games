@@ -13,6 +13,7 @@ async function shownQuestion(page: Page, number: number) {
   const question = content.questions.find((candidate) => candidate.prompt === prompt)!;
   return {
     prompt,
+    choices: question.choices,
     right: question.choices[question.answer],
     wrong: question.choices[(question.answer + 1) % question.choices.length],
   };
@@ -45,6 +46,7 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
   await startMatch(operator);
 
   let question = await shownQuestion(display, 1);
+  const displayChoices = display.getByRole("list", { name: "Choices" }).getByRole("listitem");
   for (const text of [question.right, question.wrong]) {
     await expect(display.getByRole("list", { name: "Choices" }).getByText(text, { exact: true })).toBeVisible();
     await expect(choice(player1, text)).toBeEnabled();
@@ -56,12 +58,16 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
   await choice(player1, question.wrong).click();
   await expect(player1.getByText("Wrong answer. Wait for the next question.")).toBeVisible();
   await expect(choice(player1, question.right)).toBeDisabled();
-  await expect(choice(player2, question.right)).toBeEnabled();
+  await expect(displayChoices).toHaveText(question.choices);
 
   // A reload mid-question recovers the question and who may answer it.
   await player1.reload();
   await expect(player1.getByRole("heading", { level: 2 })).toHaveText(question.prompt);
   await expect(choice(player1, question.right)).toBeDisabled();
+  await player2.reload();
+  for (const text of question.choices) {
+    await expect(choice(player2, text)).toBeEnabled();
+  }
 
   await choice(player2, question.right).click();
   await expect(display.getByText(/^Bilal takes \d+ points$/)).toBeVisible();
@@ -73,6 +79,18 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
     question = await shownQuestion(display, number);
     await shownQuestion(player1, number);
     prompts.push(question.prompt);
+    if (number === 2 && number < content.questionsPerMatch) {
+      const scoresBefore = await scores(display).allTextContents();
+      await choice(player1, question.wrong).click();
+      await expect(player1.getByText("Wrong answer. Wait for the next question.")).toBeVisible();
+      await player2.reload();
+      await expect(player2.getByRole("heading", { level: 2 })).toHaveText(question.prompt);
+      await choice(player2, question.wrong).click();
+      await expect(display.getByText("No points this time")).toBeVisible();
+      await expect(displayChoices).toHaveText(question.choices);
+      await expect(scores(display)).toHaveText(scoresBefore);
+      continue;
+    }
     if (number === 3) {
       // A display that was away catches up on the question in progress.
       await display.context().setOffline(true);

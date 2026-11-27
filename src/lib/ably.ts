@@ -1,5 +1,5 @@
 import { createHttpClient, type PubSubHttpClient } from "@ably/pubsub-server";
-import { channelName, isQuizDisplay, leaderboardChannel } from "./protocol";
+import { budgetResultsChannel, channelName, isQuizDisplay, leaderboardChannel } from "./protocol";
 import type { Device } from "./sessions";
 
 let client: PubSubHttpClient | undefined;
@@ -10,13 +10,14 @@ const ably = () => {
   return (client ??= createHttpClient({ key: process.env.ABLY_API_KEY }));
 };
 
-/** Only quiz displays listen for event-wide leaderboard changes. */
+/** Event-wide subscriptions depend on the game and device role. */
 export const tokenRequestFor = (device: Device) =>
   ably().auth.createTokenRequest({
     clientId: device.deviceId,
     capability: {
       [channelName(device.code)]: ["subscribe", "presence"],
       ...(isQuizDisplay(device) ? { [leaderboardChannel]: ["subscribe"] } : {}),
+      ...(device.gameType === "budget" && { [budgetResultsChannel]: ["subscribe"] }),
     },
   });
 
@@ -26,15 +27,16 @@ export async function presentDeviceIds(code: string) {
   return new Set(items.map((member) => member.clientId));
 }
 
+export const publishChanged = (code: string) => publishSnapshotChange(channelName(code));
+export const publishBudgetResultsChanged = () => publishSnapshotChange(budgetResultsChannel);
+
+export const publishLeaderboardChanged = () => publishSnapshotChange(leaderboardChannel);
+
 /**
- * Tells a session's devices to fetch a new snapshot. Call after the change is committed.
- * A failure is logged and swallowed: the change is already saved, and devices catch up on their next snapshot.
+ * Tells subscribed devices to fetch a new snapshot after the change is committed.
+ * A failure is logged because the change is already saved and devices catch up on their next snapshot.
  */
-export const publishChanged = (code: string) => publishChange(channelName(code));
-
-export const publishLeaderboardChanged = () => publishChange(leaderboardChannel);
-
-async function publishChange(channel: string) {
+async function publishSnapshotChange(channel: string) {
   try {
     await ably().channels.get(channel).publish("changed", null);
   } catch (error) {

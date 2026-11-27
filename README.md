@@ -49,7 +49,7 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
 2. In the project's Storage tab, add a Neon Postgres database. It sets `DATABASE_URL`.
    Pick the region closest to the venue, and set the same region under Settings > Functions.
 3. Under Settings > Environment Variables, add `ABLY_API_KEY` with the Ably app's root key.
-4. Deploy. The `vercel-build` script applies `db/schema.sql` before building.
+4. Deploy. The `vercel-build` script applies pending database migrations before building.
 
 ## How pairing and live sync work
 
@@ -57,15 +57,26 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
   kept in the browser, so a reload keeps its seat. The joining browser creates the token,
   so a join can safely be retried when the reply is lost.
 - Postgres is the source of truth. After a change commits, the server publishes a `changed`
-  message on the session's Ably channel, and each device fetches a new snapshot.
+  message on Ably, and subscribed devices fetch a new snapshot. Budget confirmations use
+  the event-wide budget channel. Other changes use the session's channel.
   Devices also fetch one on every connect and reconnect.
-- Ably presence shows which devices are connected. Devices subscribe to their own session channel.
-  Quiz displays also subscribe to event-wide leaderboard changes. The server publishes both kinds of update.
+- Ably presence shows which devices are connected to each session. Budget devices also listen
+  for event-wide result changes, and quiz displays listen for event-wide leaderboard changes.
+  Only the server publishes.
+
+## How budget results work
+
+The deployment's database holds one event's rounds. The result compares each product's share
+with its average share across confirmed rounds in all budget sessions. Each round contributes
+equally using its saved budget and product names. A product absent from a round contributes zero
+for that round. Confirming a round refreshes results on connected budget devices.
 
 ## How a quiz match works
 
 - The server serializes taps by locking the match row. An answer is scored on the time it reached the server.
-- A wrong answer locks out only the player who gave it. If both answer wrong, the question closes with no points.
+- A first wrong answer locks out that player and opens one retry for the opponent.
+  The opponent's next snapshot enables a fresh tap, scored from the original question opening.
+  If both answer wrong, the question closes with no points.
 - No server timer opens the next question. Its opening time is saved when the previous one closes,
   and each device asks for a new snapshot at that moment.
 - The correct choice never leaves the server.
