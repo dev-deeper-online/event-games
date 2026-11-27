@@ -1,5 +1,5 @@
 /** The quiz state machine. The server owns it; `now` is always the server's clock, passed in so tests can set it. */
-import { randomInt } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import content from "../../content/quiz.json";
 import { db, isUniqueViolation, transaction } from "./db";
 import { isPlayer, playerSlots, type Match, type PlayerRole, type Role } from "./protocol";
@@ -80,14 +80,14 @@ export async function startMatch(
   return null;
 }
 
-export type Submission = { matchId: string; question: number; choice: number };
+export type Submission = { matchId: string; question: number; choice: number; retryId?: string };
 
 const notOpen: Refusal = { error: "That question is not open.", status: 409 };
 
 /** Accepts or refuses one tap. `receivedAt` is when it reached the server, which is what it is scored on. */
 export async function submitAnswer(
   { sessionId, role }: Device,
-  { matchId, question, choice }: Submission,
+  { matchId, question, choice, retryId }: Submission,
   receivedAt: number,
 ): Promise<Refusal | null> {
   if (!isPlayer(role)) return { error: "Only players can answer.", status: 403 };
@@ -110,14 +110,19 @@ export async function submitAnswer(
       choice_count: number;
       correct_choice: number;
       opens_at: Date;
+      retry_id: string | null;
       locked_out: PlayerRole[];
     }>(
-      `select position, cardinality(choices) as choice_count, correct_choice, opens_at, locked_out
+      `select position, cardinality(choices) as choice_count, correct_choice, opens_at, retry_id, locked_out
        from match_questions where match_id = $1 and closed_at is null order by position limit 1`,
       [matchId],
     );
     if (open?.position !== question || open.opens_at.getTime() > receivedAt) return notOpen;
     if (open.locked_out.includes(role)) return { error: "You have already answered this question.", status: 409 };
+    // Only the committed retry snapshot can supply this ID to the opponent.
+    if ((open.retry_id ?? undefined) !== retryId) {
+      return { error: "Tap again to use your retry.", status: 409 };
+    }
     if (choice < 0 || choice >= open.choice_count) return { error: "That choice does not exist.", status: 400 };
 
     const correct = choice === open.correct_choice;
@@ -125,9 +130,9 @@ export async function submitAnswer(
     const closes = correct || playerSlots.quiz.every((player) => lockedOut.includes(player));
     const points = correct ? pointsAfter(receivedAt - open.opens_at.getTime()) : 0;
     await client.query(
-      `update match_questions set locked_out = $3, closed_at = $4, scorer = $5, points = $6
+      `update match_questions set locked_out = $3, closed_at = $4, scorer = $5, points = $6, retry_id = $7
        where match_id = $1 and position = $2`,
-      [matchId, question, lockedOut, closes ? new Date(receivedAt) : null, correct ? role : null, points],
+      [matchId, question, lockedOut, closes ? new Date(receivedAt) : null, correct ? role : null, points, closes ? null : randomUUID()],
     );
     if (!closes) return null;
 
@@ -161,6 +166,7 @@ type MatchRow = {
   prompt: string;
   choices: string[];
   opens_at: Date;
+  retry_id: string | null;
   locked_out: PlayerRole[];
   scorer: PlayerRole | null;
   points: number;
@@ -175,7 +181,7 @@ export async function matchFor(sessionId: string, role: Role, now: number): Prom
   } = await db.query<MatchRow>(
     `select m.id, m.player1_name, m.player2_name, m.player1_score, m.player2_score, m.completed_at,
        (select count(*)::int from match_questions where match_id = m.id) as question_count,
-       q.position, q.prompt, q.choices, q.opens_at, q.closed_at, q.locked_out, q.scorer, q.points
+       q.position, q.prompt, q.choices, q.opens_at, q.closed_at, q.locked_out, q.scorer, q.points, q.retry_id
      from (select * from matches where session_id = $1 order by created_at desc limit 1) m
      join match_questions q on q.match_id = m.id and q.opens_at is not null
      order by q.position desc limit 2`,
@@ -198,5 +204,11 @@ export async function matchFor(sessionId: string, role: Role, now: number): Prom
   const result = { scorer: shown.scorer, points: shown.points };
   if (shown.completed_at) return { ...match, phase: "complete", result };
   if (shown.closed_at) return { ...match, phase: "closed", result, nextInMs: waitMs };
-  return { ...match, phase: "open", canAnswer: isPlayer(role) && !shown.locked_out.includes(role) };
+  const canAnswer = isPlayer(role) && !shown.locked_out.includes(role);
+  return {
+    ...match,
+    phase: "open",
+    canAnswer,
+    ...(canAnswer && shown.retry_id ? { retryId: shown.retry_id } : {}),
+  };
 }
