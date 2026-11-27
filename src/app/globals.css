@@ -1,0 +1,229 @@
+/* Placeholder styling until the client's display and tablet designs arrive. */
+:root {
+  color-scheme: light dark;
+  --background: light-dark(#f6f6f4, #101113);
+  --surface: light-dark(#ffffff, #1b1d21);
+  --text: light-dark(#17181a, #f1f1ef);
+  --muted: light-dark(#5c5f66, #a3a7af);
+  --border: light-dark(#d4d5d1, #33363d);
+  --accent: light-dark(#1f4fd8, #86a8ff);
+  --accent-text: light-dark(#ffffff, #0b1020);
+  --good: light-dark(#126b3a, #62d394);
+  --warn: light-dark(#8a5300, #f2b455);
+  --bad: light-dark(#a8201a, #ff8d85);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--background);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+main,
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+main {
+  width: min(100%, 34rem);
+  margin-inline: auto;
+  padding: 1.5rem 1rem;
+}
+
+h1 {
+  font-size: clamp(1.75rem, 7vw, 2.5rem);
+  line-height: 1.15;
+}
+
+a {
+  color: var(--accent);
+  align-self: center;
+  padding: 0.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  border: 0;
+}
+
+legend {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+input,
+button,
+.choice,
+.button {
+  min-height: 3.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  font: inherit;
+}
+
+input:not([type="radio"]),
+.choice {
+  background: var(--surface);
+  color: inherit;
+}
+
+.code-input {
+  padding-inline: 1rem;
+  font-size: 1.75rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.choice {
+  /* Three equal columns on every width, down to a 320px phone. */
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding-block: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.choice:has(:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.choice input {
+  min-height: 0;
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--accent);
+}
+
+button,
+.button {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  text-decoration: none;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+[role="alert"] {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.connection {
+  align-self: flex-end;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.connection[data-state="connected"] {
+  color: var(--good);
+}
+
+.connection[data-state="failed"] {
+  color: var(--bad);
+}
+
+.eyebrow {
+  display: block;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.code strong {
+  font-family: ui-monospace, monospace;
+  font-size: clamp(2.25rem, 12vw, 3.5rem);
+  letter-spacing: 0.15em;
+  /* Balances the spacing after the last letter, keeping the code centred. */
+  padding-left: 0.15em;
+}
+
+.devices {
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.devices li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem;
+}
+
+.devices li + li {
+  border-top: 1px solid var(--border);
+}
+
+.devices [data-state] {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.devices [data-state="connected"] {
+  color: var(--good);
+}
+
+.devices [data-state="away"] {
+  color: var(--warn);
+}
+
+/* A shared display is read from across the room. */
+@media (min-width: 100rem) and (min-height: 50rem) {
+  html {
+    font-size: 150%;
+  }
+}
