@@ -1,12 +1,11 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { DatabaseError } from "pg";
-import { db } from "./db";
+import { db, isUniqueViolation } from "./db";
 import { playerSlots, roleLabels, type GameType, type JoinableRole, type Role, type Snapshot } from "./protocol";
+import { matchFor } from "./quiz";
+import type { Refusal } from "./refusal";
 
 // No 0, O, 1 or I: operators read these codes aloud and guests type them.
 const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-const uniqueViolation = "23505";
 
 const newCode = () => Array.from({ length: 6 }, () => alphabet[randomInt(alphabet.length)]).join("");
 
@@ -36,7 +35,7 @@ export async function joinSession(
   code: string,
   role: JoinableRole,
   token: string,
-): Promise<{ error: string; status: 404 | 409 } | null> {
+): Promise<Refusal | null> {
   const {
     rows: [session],
   } = await db.query<{ id: string; game_type: GameType }>("select id, game_type from sessions where code = $1", [code]);
@@ -49,7 +48,7 @@ export async function joinSession(
   try {
     await db.query("insert into devices (session_id, role, token_hash) values ($1, $2, $3)", seat);
   } catch (error) {
-    if (!(error instanceof DatabaseError) || error.code !== uniqueViolation) throw error;
+    if (!isUniqueViolation(error)) throw error;
     const { rowCount } = await db.query(
       "select 1 from devices where session_id = $1 and role = $2 and token_hash = $3",
       seat,
@@ -74,19 +73,32 @@ export async function authenticate(request: Request): Promise<Device | null> {
   return rows[0] ?? null;
 }
 
-export async function snapshotFor({ sessionId, role, code, gameType }: Device): Promise<Snapshot> {
-  const { rows } = await db.query<{ id: string; role: Role }>(
-    "select id, role from devices where session_id = $1",
-    [sessionId],
-  );
+const devicesOf = async (sessionId: string) =>
+  (await db.query<{ id: string; role: Role }>("select id, role from devices where session_id = $1", [sessionId])).rows;
+
+/** Every player seat of this session's game paired with the device in it, if one has joined. */
+export async function playerDevices({ sessionId, gameType }: Device) {
+  const devices = await devicesOf(sessionId);
+  return playerSlots[gameType].map((slot) => devices.find((device) => device.role === slot)?.id);
+}
+
+export async function snapshotFor(
+  { sessionId, role, code, gameType }: Device,
+  now = Date.now(),
+): Promise<Snapshot> {
+  const [devices, match] = await Promise.all([
+    devicesOf(sessionId),
+    gameType === "quiz" ? matchFor(sessionId, role, now) : null,
+  ]);
   const seats: Role[] = ["operator", "display", ...playerSlots[gameType]];
   return {
     code,
     gameType,
     role,
+    match,
     seats: seats.map((seat) => ({
       role: seat,
-      deviceIds: rows.filter((device) => device.role === seat).map((device) => device.id),
+      deviceIds: devices.filter((device) => device.role === seat).map((device) => device.id),
     })),
   };
 }

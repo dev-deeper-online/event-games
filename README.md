@@ -15,6 +15,21 @@ npm run dev
 ```
 
 Open `/operator` to start a session, then open `/` on each device and enter the join code.
+In a quiz session, the operator enters both names and starts the match once both players are connected.
+
+## Quiz content
+
+`content/quiz.json` holds the questions and the tunable numbers:
+
+- `questionsPerMatch`: how many questions each match draws, at random and without repeats.
+- `pauseSeconds`: the wait between a question closing and the next one opening.
+- `scoring`: a correct answer earns `start` points, minus `lostPerSecond` for each second
+  since the question opened, never less than `floor`.
+- `questions`: each has a unique `prompt`, at least two `choices`, and `answer`,
+  the position of the correct choice counting from 0.
+
+A mistake in the file fails the build with a message that names it. A change takes effect on the
+next deploy; a match already running keeps the questions it drew.
 
 ## Checks
 
@@ -47,7 +62,18 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
 - Ably presence shows which devices are connected. A device's Ably token only lets it listen
   on its own session's channel; only the server publishes.
 
+## How a quiz match works
+
+- The server serializes taps by locking the match row. An answer is scored on the time it reached the server.
+- A wrong answer locks out only the player who gave it. If both answer wrong, the question closes with no points.
+- No server timer opens the next question. Its opening time is saved when the previous one closes,
+  and each device asks for a new snapshot at that moment.
+- The correct choice never leaves the server.
+
 Known limits:
+
+- Two taps that reach the server within a few milliseconds of each other may be accepted in either order.
+- A running match ends only when its last question closes. If a player leaves, start a new session.
 
 - A player slot stays taken for the life of the session. If a tablet is lost or its browser data
   is cleared, start a new session.

@@ -1,7 +1,8 @@
 "use client";
 
 import { createClient, type PubSubClient } from "@ably/pubsub-device";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { postJson } from "./api-client";
 import { channelName, tokenKey, type Snapshot } from "./protocol";
 
 export type Station = {
@@ -13,11 +14,15 @@ export type Station = {
   rejected: boolean;
 };
 
+/** Sends a command as this device, then catches up whether or not it was accepted. */
+export type Send = (url: string, body: unknown) => Promise<void>;
+
 const initial: Station = { snapshot: null, present: null, connection: "connecting", rejected: false };
 
 /** Keeps one device's view of its session current: snapshot on join and reconnect, then on every change. */
-export function useStation(code: string, role: string): Station {
+export function useStation(code: string, role: string): Station & { send: Send } {
   const [station, setStation] = useState(initial);
+  const refreshNow = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     const update = (patch: Partial<Station>) => setStation((current) => ({ ...current, ...patch }));
@@ -51,7 +56,10 @@ export function useStation(code: string, role: string): Station {
         if (!response.ok) throw new Error(`Snapshot failed with ${response.status}`);
         const snapshot: Snapshot = await response.json();
         // Replies can arrive out of order; only the newest request may win.
-        if (!stopped && request === latest) update({ snapshot });
+        if (stopped || request !== latest) return;
+        update({ snapshot });
+        // Nothing is published when the pause ends, so each device asks again when the next question opens.
+        if (snapshot.match?.phase === "closed") retry = setTimeout(refresh, snapshot.match.nextInMs);
       } catch {
         if (!stopped && request === latest) retry = setTimeout(refresh, 2000);
       }
@@ -109,6 +117,7 @@ export function useStation(code: string, role: string): Station {
 
     const start = async () => {
       if (!token) return reject();
+      refreshNow.current = refresh;
       connect();
       await refresh();
     };
@@ -121,5 +130,18 @@ export function useStation(code: string, role: string): Station {
     };
   }, [code, role]);
 
-  return station;
+  const send = useCallback<Send>(
+    async (url, body) => {
+      try {
+        await postJson(url, body, { authorization: `Bearer ${localStorage.getItem(tokenKey(code, role))}` });
+      } finally {
+        // The "changed" message can be lost, and a refusal usually means this view is out of date.
+        // Awaited, so the buttons stay disabled until the view has caught up.
+        await refreshNow.current();
+      }
+    },
+    [code, role],
+  );
+
+  return { ...station, send };
 }

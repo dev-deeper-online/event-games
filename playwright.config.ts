@@ -1,4 +1,8 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+
+// Tests that call server code directly need the same database as the server under test.
+if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
 const port = 3100;
 

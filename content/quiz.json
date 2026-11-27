@@ -1,0 +1,19 @@
+{
+  "questionsPerMatch": 5,
+  "pauseSeconds": 4,
+  "scoring": { "start": 1000, "lostPerSecond": 50, "floor": 100 },
+  "questions": [
+    { "prompt": "Which planet is closest to the Sun?", "choices": ["Venus", "Mercury", "Mars", "Earth"], "answer": 1 },
+    { "prompt": "How many sides does a hexagon have?", "choices": ["Five", "Six", "Seven", "Eight"], "answer": 1 },
+    { "prompt": "Which ocean is the largest?", "choices": ["Atlantic", "Indian", "Pacific", "Arctic"], "answer": 2 },
+    { "prompt": "What is the chemical symbol for gold?", "choices": ["Ag", "Gd", "Go", "Au"], "answer": 3 },
+    { "prompt": "Which animal is the tallest on land?", "choices": ["Giraffe", "Elephant", "Camel", "Moose"], "answer": 0 },
+    { "prompt": "How many minutes are in a full day?", "choices": ["1,240", "1,440", "1,640", "2,400"], "answer": 1 },
+    { "prompt": "Which gas do plants take in from the air?", "choices": ["Oxygen", "Nitrogen", "Carbon dioxide", "Helium"], "answer": 2 },
+    { "prompt": "On which continent is the Sahara desert?", "choices": ["Asia", "Africa", "Australia", "South America"], "answer": 1 },
+    { "prompt": "Which is the smallest prime number?", "choices": ["0", "1", "2", "3"], "answer": 2 },
+    { "prompt": "How many strings does a standard violin have?", "choices": ["Four", "Five", "Six", "Seven"], "answer": 0 },
+    { "prompt": "What is frozen water called?", "choices": ["Steam", "Dew", "Mist", "Ice"], "answer": 3 },
+    { "prompt": "Which shape has three sides?", "choices": ["Square", "Circle", "Triangle", "Pentagon"], "answer": 2 }
+  ]
+}

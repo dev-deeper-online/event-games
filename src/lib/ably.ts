@@ -16,6 +16,12 @@ export const tokenRequestFor = (code: string, deviceId: string) =>
     capability: { [channelName(code)]: ["subscribe", "presence"] },
   });
 
+/** Ids of the devices connected to a session's live channel right now. */
+export async function presentDeviceIds(code: string) {
+  const { items } = await ably().channels.get(channelName(code)).presence.get();
+  return new Set(items.map((member) => member.clientId));
+}
+
 /**
  * Tells a session's devices to fetch a new snapshot. Call after the change is committed.
  * A failure is logged and swallowed: the change is already saved, and devices catch up on their next snapshot.

@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { gameLabels, roleLabels, type Snapshot } from "@/lib/protocol";
-import { useStation, type Station } from "@/lib/use-station";
+import { QuizMatch, StartMatch } from "@/components/quiz-view";
+import { gameLabels, playerSlots, roleLabels, type Snapshot } from "@/lib/protocol";
+import { useStation, type Send, type Station } from "@/lib/use-station";
 
 const connectionLabels: Record<Station["connection"], string> = {
   connecting: "Connecting…",
@@ -12,7 +13,7 @@ const connectionLabels: Record<Station["connection"], string> = {
 };
 
 export function StationView({ code, role }: { code: string; role: string }) {
-  const { snapshot, present, connection, rejected } = useStation(code, role);
+  const { snapshot, present, connection, rejected, send } = useStation(code, role);
 
   if (rejected) {
     return (
@@ -32,26 +33,50 @@ export function StationView({ code, role }: { code: string; role: string }) {
         {connectionLabels[connection]}
       </p>
       {snapshot ? (
-        <>
-          <header>
-            <p className="eyebrow">{gameLabels[snapshot.gameType]} session</p>
-            <h1>{roleLabels[snapshot.role]}</h1>
-          </header>
-          <p className="code">
-            <span className="eyebrow">Join code</span>
-            <strong data-testid="join-code">{snapshot.code}</strong>
-          </p>
-          {/* Offline, this device cannot know who else is still connected. */}
-          {snapshot.role === "operator" || snapshot.role === "display" ? (
-            <Devices seats={snapshot.seats} present={connection === "connected" ? present : null} />
-          ) : (
-            <p>You are in. Wait for the operator to start.</p>
-          )}
-        </>
+        // Offline, this device cannot know who else is still connected.
+        <Session snapshot={snapshot} present={connection === "connected" ? present : null} send={send} />
       ) : (
         <p>Loading the session…</p>
       )}
     </main>
+  );
+}
+
+function Session({ snapshot, present, send }: { snapshot: Snapshot; present: Station["present"]; send: Send }) {
+  const { role, match } = snapshot;
+  const running = match !== null && match.phase !== "complete";
+  const staff = role === "operator" || role === "display";
+  // The display gives the whole screen to a running match.
+  const matchOnly = running && role === "display";
+  const playersReady = snapshot.seats
+    .filter((seat) => (playerSlots[snapshot.gameType] as readonly string[]).includes(seat.role))
+    .every((seat) => seat.deviceIds.some((id) => present?.has(id)));
+
+  return (
+    <>
+      {!matchOnly && (
+        <header>
+          <p className="eyebrow">{gameLabels[snapshot.gameType]} session</p>
+          <h1>{roleLabels[role]}</h1>
+        </header>
+      )}
+      {match && <QuizMatch match={match} role={role} send={send} />}
+      {!matchOnly && (
+        <>
+          {(!running || role === "operator") && (
+            <p className="code">
+              <span className="eyebrow">Join code</span>
+              <strong data-testid="join-code">{snapshot.code}</strong>
+            </p>
+          )}
+          {role === "operator" && snapshot.gameType === "quiz" && !running && (
+            <StartMatch key={match?.id} ready={playersReady} send={send} />
+          )}
+          {staff && <Devices seats={snapshot.seats} present={present} />}
+        </>
+      )}
+      {!staff && !running && <p>You are in. Wait for the operator to start.</p>}
+    </>
   );
 }
 
@@ -70,7 +95,7 @@ function Devices({ seats, present }: { seats: Snapshot["seats"]; present: Statio
   };
 
   return (
-    <ul className="devices" aria-label="Devices">
+    <ul className="rows devices" aria-label="Devices">
       {seats.map(({ role, deviceIds }) => {
         const status = statusOf(deviceIds);
         return (
