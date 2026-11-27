@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { BudgetView } from "@/components/budget-view";
-import { QuizLeaderboard, QuizMatch, StartMatch } from "@/components/quiz-view";
+import { QuizLeaderboard, QuizMatch, StartMatch, StopMatch } from "@/components/quiz-view";
 import { gameLabels, playerSlots, roleLabels, type Snapshot } from "@/lib/protocol";
 import { useStation, type Send, type Station } from "@/lib/use-station";
 
@@ -49,7 +49,7 @@ function Session({ snapshot, present, send, connection }: {
   send: Send;
   connection: Station["connection"];
 }) {
-  const { role, match, leaderboard } = snapshot;
+  const { role, match, leaderboard, stopNotice } = snapshot;
   const running = match !== null && match.phase !== "complete";
   const staff = role === "operator" || role === "display";
   // The display gives the whole screen to a running match.
@@ -57,6 +57,15 @@ function Session({ snapshot, present, send, connection }: {
   const playersReady = snapshot.seats
     .filter((seat) => (playerSlots[snapshot.gameType] as readonly string[]).includes(seat.role))
     .every((seat) => seat.deviceIds.some((id) => present?.has(id)));
+
+  if (role === "display" && stopNotice) {
+    return (
+      <section className="match" role="status">
+        <h1>Match stopped</h1>
+        <p>{stopNotice.reason === "operator" ? "The operator ended the match." : "A player device disconnected."}</p>
+      </section>
+    );
+  }
 
   return (
     <>
@@ -67,6 +76,7 @@ function Session({ snapshot, present, send, connection }: {
         </header>
       )}
       {match && <QuizMatch match={match} role={role} send={send} />}
+      {role === "operator" && running && <StopMatch key={match.id} matchId={match.id} send={send} />}
       {leaderboard && <QuizLeaderboard entries={leaderboard} />}
       {!matchOnly && (
         <>

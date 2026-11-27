@@ -16,7 +16,10 @@ export async function POST(request: Request) {
   }
 
   const result = await submitAnswer(device, { matchId, question, choice, retryId }, receivedAt);
-  if ("error" in result) return Response.json({ error: result.error }, { status: result.status });
+  if ("error" in result) {
+    if (result.stopped) await publishChanged(device.code);
+    return Response.json({ error: result.error }, { status: result.status });
+  }
 
   await Promise.all([publishChanged(device.code), result.completed && publishLeaderboardChanged()]);
   return Response.json({}, { status: 201 });

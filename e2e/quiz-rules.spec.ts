@@ -2,8 +2,8 @@
 import { expect, test } from "@playwright/test";
 import content from "../content/quiz.json";
 import type { PlayerRole, Role, Snapshot } from "../src/lib/protocol";
-import { checkContent, startMatch, submitAnswer, type Submission } from "../src/lib/quiz";
-import { authenticate, createSession, joinSession, snapshotFor, type Device } from "../src/lib/sessions";
+import { checkContent, startMatch, stopMatch, submitAnswer, type Submission } from "../src/lib/quiz";
+import { authenticate, createSession, joinSession, liveSnapshotFor, snapshotFor, type Device } from "../src/lib/sessions";
 import { newToken } from "./station";
 
 // The default scoring numbers, pinned so that tuning the content file cannot fail these tests.
@@ -11,6 +11,7 @@ Object.assign(content.scoring, { start: 1000, lostPerSecond: 50, floor: 100 });
 
 const start = Date.parse("2026-01-01T12:00:00Z");
 const pause = content.pauseSeconds * 1000;
+const grace = content.disconnectGraceSeconds * 1000;
 const names = { player1: "Amira", player2: "Bilal" };
 
 async function station(gameType: "quiz" | "budget" = "quiz") {
@@ -33,9 +34,19 @@ async function running() {
   expect(await startMatch(operator, names, start)).toBeNull();
   const view = async (now: number, device: Device = display) => (await snapshotFor(device, now)).match!;
   const { id } = await view(start);
+  const refreshInMs = (await snapshotFor(display, start)).refreshInMs!;
+  const firstDeadline = start + refreshInMs + grace;
+  let lastCheckIn = start;
+  const stayConnected = async (until: number) => {
+    for (let now = lastCheckIn + refreshInMs; now <= until; now += refreshInMs) {
+      await liveSnapshotFor(player1, now);
+      await liveSnapshotFor(player2, now);
+      lastCheckIn = now;
+    }
+  };
   const answer = (device: Device, question: number, choice: number, at: number, attempt?: Pick<Submission, "matchId" | "retryId">) =>
     submitAnswer(device, { matchId: id, question, choice, ...attempt }, at);
-  return { operator, display, player1, player2, view, answer };
+  return { operator, display, player1, player2, view, answer, firstDeadline, stayConnected };
 }
 
 const rightChoice = (match: NonNullable<Snapshot["match"]>) =>
@@ -48,15 +59,73 @@ function retryAttempt(match: NonNullable<Snapshot["match"]>) {
   return { matchId: match.id, retryId: match.retryId };
 }
 
+test("only the operator can discard a running match and the station can start again", async () => {
+  const { operator, display, player1, view, answer } = await running();
+  const first = await view(start);
+  expect(await answer(player1, 1, rightChoice(first), start)).toEqual({ completed: content.questionsPerMatch === 1 });
+
+  expect(await stopMatch(player1, first.id, start + 1)).toMatchObject({ status: 403 });
+  expect(await stopMatch(operator, first.id, start + 1)).toBeNull();
+  expect(await snapshotFor(display, start + 1)).toMatchObject({ match: null, stopNotice: { reason: "operator" } });
+  expect(await answer(player1, 1, 0, start + 2)).toMatchObject({ status: 409 });
+  expect(await snapshotFor(display, start + 60_000)).toMatchObject({ match: null, stopNotice: null });
+
+  expect(await startMatch(operator, names, start + 60_000)).toBeNull();
+  expect(await stopMatch(operator, first.id, start + 60_001)).toMatchObject({ status: 409 });
+  const next = await view(start + 60_001);
+  expect(next.id).not.toBe(first.id);
+  expect(score(next, "player1")).toBe(0);
+});
+
+test("a player who returns inside the grace period resumes with their answer lockout", async () => {
+  const { display, player1, player2, view, answer, firstDeadline } = await running();
+  const first = await view(start);
+  expect(await answer(player1, 1, wrongChoice(first), start)).toEqual({ completed: false });
+  await liveSnapshotFor(player2, start + Math.floor(grace / 2));
+
+  const returning = await liveSnapshotFor(player1, firstDeadline - 1);
+  expect(returning.stopped).toBe(false);
+  expect(returning.snapshot.match).toMatchObject({ id: first.id, question: first.question, canAnswer: false });
+  const afterOriginalDeadline = await liveSnapshotFor(display, firstDeadline);
+  expect(afterOriginalDeadline.snapshot.match).toMatchObject({ id: first.id, phase: "open" });
+});
+
+test("one expired player deadline discards the match even if that player tries to reconnect", async () => {
+  const { display, player1, player2, view, firstDeadline } = await running();
+  const first = await view(start);
+  await liveSnapshotFor(player2, start + Math.floor(grace / 2));
+  const readOnly = await liveSnapshotFor(player1, firstDeadline - 1, { checkIn: false });
+  expect(readOnly.snapshot.match).toMatchObject({ id: first.id });
+
+  const returning = await liveSnapshotFor(player1, firstDeadline);
+  expect(returning).toMatchObject({ stopped: true, snapshot: { match: null } });
+  expect((await liveSnapshotFor(display, firstDeadline)).snapshot).toMatchObject({
+    match: null,
+    stopNotice: { reason: "disconnect" },
+  });
+});
+
+test("an answer arriving at an expired player deadline cannot save the match", async () => {
+  const { display, player2, view, answer, firstDeadline } = await running();
+  const first = await view(start);
+  await liveSnapshotFor(player2, start + Math.floor(grace / 2));
+
+  expect(await answer(player2, 1, rightChoice(first), firstDeadline)).toMatchObject({ status: 409, stopped: true });
+  expect(await snapshotFor(display, firstDeadline)).toMatchObject({
+    match: null,
+    stopNotice: { reason: "disconnect" },
+  });
+});
+
 for (const [elapsed, points] of [
   [0, 1000],
   [3_500, 825],
   [18_000, 100],
-  [3_600_000, 100],
 ]) {
   test(`a correct answer after ${elapsed}ms earns ${points} points`, async () => {
-    const { player2, view, answer } = await running();
+    const { player2, view, answer, stayConnected } = await running();
 
+    await stayConnected(start + elapsed);
     expect(await answer(player2, 1, rightChoice(await view(start)), start + elapsed)).toEqual({ completed: content.questionsPerMatch === 1 });
 
     const closed = await view(start + elapsed);
@@ -66,9 +135,10 @@ for (const [elapsed, points] of [
 }
 
 test("a question has no timeout", async () => {
-  const { player1, view } = await running();
+  const { player1, stayConnected } = await running();
+  await stayConnected(start + grace * 2);
 
-  expect(await view(start + 24 * 3_600_000, player1)).toMatchObject({
+  expect((await liveSnapshotFor(player1, start + grace * 2)).snapshot.match).toMatchObject({
     phase: "open",
     question: { number: 1 },
     canAnswer: true,
@@ -93,8 +163,9 @@ test("no device is told which choice is correct", async () => {
 });
 
 test("simultaneous correct taps give the question to one player only", async () => {
-  const { player1, player2, view, answer } = await running();
+  const { player1, player2, view, answer, stayConnected } = await running();
   const choice = rightChoice(await view(start));
+  await stayConnected(start + 2000);
 
   const outcomes = await Promise.all(
     [player1, player2, player1, player2].map((player) => answer(player, 1, choice, start + 2000)),
@@ -115,7 +186,7 @@ test("simultaneous taps from one player count once", async () => {
 });
 
 test("a wrong answer locks out only the player who gave it", async () => {
-  const { player1, player2, view, answer } = await running();
+  const { player1, player2, view, answer, stayConnected } = await running();
   const open = await view(start);
 
   expect(await answer(player1, 1, wrongChoice(open), start + 1000)).toEqual({ completed: false });
@@ -125,13 +196,15 @@ test("a wrong answer locks out only the player who gave it", async () => {
   expect(retry).toMatchObject({ phase: "open", canAnswer: true, question: open.question });
   expect(await view(start + 1000)).not.toHaveProperty("retryId");
   expect(await view(start + 1000, player1)).not.toHaveProperty("retryId");
+  await stayConnected(start + 2000);
   expect(await answer(player1, 1, rightChoice(open), start + 2000)).toMatchObject({ status: 409 });
+  await stayConnected(start + 4000);
   expect(await answer(player2, 1, rightChoice(open), start + 4000, retryAttempt(retry))).toEqual({ completed: content.questionsPerMatch === 1 });
   expect(await view(start + 4000)).toMatchObject({ result: { scorer: "player2", points: 800 } });
 });
 
 test("a tap received before the retry opens cannot count as the retry", async () => {
-  const { player1, player2, view, answer } = await running();
+  const { player1, player2, view, answer, stayConnected } = await running();
   const open = await view(start, player2);
   expect(open).not.toHaveProperty("retryId");
 
@@ -143,17 +216,19 @@ test("a tap received before the retry opens cannot count as the retry", async ()
   }
 
   const retry = retryAttempt(await view(start + 2000, player2));
+  await stayConnected(start + 4000);
   expect(await answer(player2, 1, rightChoice(open), start + 4000, retry)).toEqual({ completed: content.questionsPerMatch === 1 });
   expect(await answer(player2, 1, rightChoice(open), start + 4001, retry)).toMatchObject({ status: 409 });
   expect(await view(start + 4000)).toMatchObject({ result: { scorer: "player2", points: 800 } });
 });
 
 test("two wrong answers close the question with no points", async () => {
-  const { player1, player2, view, answer } = await running();
+  const { player1, player2, view, answer, stayConnected } = await running();
   const choice = wrongChoice(await view(start));
 
   expect(await answer(player1, 1, choice, start + 1000)).toEqual({ completed: false });
   const retry = retryAttempt(await view(start + 1000, player2));
+  await stayConnected(start + 2000);
   expect(await answer(player2, 1, choice, start + 2000, retry)).toEqual({ completed: content.questionsPerMatch === 1 });
 
   const closed = await view(start + 2000);
@@ -162,19 +237,21 @@ test("two wrong answers close the question with no points", async () => {
 });
 
 test("the next question opens by itself after the pause", async () => {
-  const { player1, player2, view, answer } = await running();
+  const { player1, player2, view, answer, stayConnected } = await running();
   const first = await view(start);
   await answer(player1, 1, rightChoice(first), start + 1000);
   const opens = start + 1000 + pause;
 
   expect(await view(opens - 1, player2)).toMatchObject({ phase: "closed", question: { number: 1 }, nextInMs: 1 });
   // A tap that arrives before the question opens cannot count, whatever it picked.
+  await stayConnected(opens - 1);
   expect(await answer(player2, 2, 0, opens - 1)).toMatchObject({ status: 409 });
 
   const second = await view(opens, player2);
   expect(second).toMatchObject({ phase: "open", question: { number: 2 }, canAnswer: true });
   expect(second.question.prompt).not.toBe(first.question.prompt);
   // Timed from this question's opening, not the match's.
+  await stayConnected(opens + 2000);
   await answer(player2, 2, rightChoice(second), opens + 2000);
   expect(await view(opens + 2000)).toMatchObject({ result: { scorer: "player2", points: 900 } });
 });
@@ -197,11 +274,12 @@ test("stale and malformed submissions are rejected", async () => {
 });
 
 test("the match ends after the configured number of distinct questions, keeping both scores", async () => {
-  const { operator, player1, player2, view, answer } = await running();
+  const { operator, player1, player2, view, answer, stayConnected } = await running();
   const prompts: string[] = [];
   let now = start;
 
   for (let number = 1; number <= content.questionsPerMatch; number++) {
+    await stayConnected(now);
     const open = await view(now);
     expect(open).toMatchObject({ phase: "open", question: { number }, questionCount: content.questionsPerMatch });
     prompts.push(open.question.prompt);
@@ -248,6 +326,7 @@ test("content mistakes are reported", () => {
     { ...content, questionsPerMatch: content.questions.length + 1 },
     { ...content, questionsPerMatch: 0 },
     { ...content, pauseSeconds: -1 },
+    { ...content, disconnectGraceSeconds: 0 },
     { ...content, scoring: { ...content.scoring, floor: content.scoring.start + 1 } },
     { ...content, questions: [...content.questions, question] },
     { ...content, questions: [{ ...question, answer: question.choices.length }] , questionsPerMatch: 1 },

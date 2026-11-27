@@ -1,9 +1,9 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { budgetRoundFor } from "./budget";
 import { db, isUniqueViolation } from "./db";
-import { isQuizDisplay, playerSlots, roleLabels, type GameType, type JoinableRole, type Role, type Snapshot } from "./protocol";
+import { isPlayer, isQuizDisplay, playerSlots, roleLabels, type GameType, type JoinableRole, type Role, type Snapshot } from "./protocol";
 import { eventLeaderboard } from "./leaderboard";
-import { matchFor } from "./quiz";
+import { matchRefreshInMs, quizFor, refreshMatchConnection } from "./quiz";
 import type { Refusal } from "./refusal";
 
 // No 0, O, 1 or I: operators read these codes aloud and guests type them.
@@ -88,9 +88,9 @@ export async function snapshotFor(
   { sessionId, role, code, gameType }: Device,
   now = Date.now(),
 ): Promise<Snapshot> {
-  const [devices, match, budgetRound] = await Promise.all([
+  const [devices, { match, stopNotice }, budgetRound] = await Promise.all([
     devicesOf(sessionId),
-    gameType === "quiz" ? matchFor(sessionId, role, now) : null,
+    gameType === "quiz" ? quizFor(sessionId, role, now) : { match: null, stopNotice: null },
     gameType === "budget" ? budgetRoundFor(sessionId, role === "player1") : null,
   ]);
   const showLeaderboard = match?.phase === "complete" || (!match && isQuizDisplay({ gameType, role }));
@@ -101,6 +101,8 @@ export async function snapshotFor(
     gameType,
     role,
     match,
+    stopNotice,
+    refreshInMs: match && match.phase !== "complete" ? matchRefreshInMs() : null,
     leaderboard,
     budgetRound,
     seats: seats.map((seat) => ({
@@ -108,4 +110,10 @@ export async function snapshotFor(
       deviceIds: devices.filter((device) => device.role === seat).map((device) => device.id),
     })),
   };
+}
+
+export async function liveSnapshotFor(device: Device, now = Date.now(), { checkIn = true } = {}) {
+  const player = checkIn && isPlayer(device.role) ? device.role : undefined;
+  const stopped = device.gameType === "quiz" && await refreshMatchConnection(device.sessionId, now, player);
+  return { snapshot: await snapshotFor(device, now), stopped };
 }

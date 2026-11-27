@@ -23,6 +23,7 @@ In a quiz session, the operator enters both names and starts the match once both
 
 - `questionsPerMatch`: how many questions each match draws, at random and without repeats.
 - `pauseSeconds`: the wait between a question closing and the next one opening.
+- `disconnectGraceSeconds`: how long the server waits after either player misses a check-in.
 - `scoring`: a correct answer earns `start` points, minus `lostPerSecond` for each second
   since the question opened, never less than `floor`.
 - `questions`: each has a unique `prompt`, at least two `choices`, and `answer`,
@@ -80,13 +81,14 @@ for that round. Confirming a round refreshes results on connected budget devices
 - No server timer opens the next question. Its opening time is saved when the previous one closes,
   and each device asks for a new snapshot at that moment.
 - The correct choice never leaves the server.
+- The operator can stop a running match. Player devices check in while a match is running. Once a
+  player's deadline expires, the next station request discards the match and the display briefly explains why it stopped.
 - The leaderboard ranks both players from every completed quiz match across sessions. Equal scores
   share a rank, and everyone tied at tenth appears.
 
 Known limits:
 
 - Two taps that reach the server within a few milliseconds of each other may be accepted in either order.
-- A running match ends only when its last question closes. If a player leaves, start a new session.
 
 - A player slot stays taken for the life of the session. If a tablet is lost or its browser data
   is cleared, start a new session.
