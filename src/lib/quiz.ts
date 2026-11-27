@@ -89,7 +89,7 @@ export async function submitAnswer(
   { sessionId, role }: Device,
   { matchId, question, choice }: Submission,
   receivedAt: number,
-): Promise<Refusal | null> {
+): Promise<Refusal | { completed: boolean }> {
   if (!isPlayer(role)) return { error: "Only players can answer.", status: 403 };
 
   return transaction(async (client) => {
@@ -129,7 +129,7 @@ export async function submitAnswer(
        where match_id = $1 and position = $2`,
       [matchId, question, lockedOut, closes ? new Date(receivedAt) : null, correct ? role : null, points],
     );
-    if (!closes) return null;
+    if (!closes) return { completed: false };
 
     const { rowCount: hasNext } = await client.query(
       "update match_questions set opens_at = $3 where match_id = $1 and position = $2",
@@ -145,7 +145,7 @@ export async function submitAnswer(
         hasNext ? null : new Date(receivedAt),
       ],
     );
-    return null;
+    return { completed: !hasNext };
   });
 }
 

@@ -59,8 +59,8 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
 - Postgres is the source of truth. After a change commits, the server publishes a `changed`
   message on the session's Ably channel, and each device fetches a new snapshot.
   Devices also fetch one on every connect and reconnect.
-- Ably presence shows which devices are connected. A device's Ably token only lets it listen
-  on its own session's channel; only the server publishes.
+- Ably presence shows which devices are connected. Devices subscribe to their own session channel.
+  Quiz displays also subscribe to event-wide leaderboard changes. The server publishes both kinds of update.
 
 ## How a quiz match works
 
@@ -69,6 +69,8 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
 - No server timer opens the next question. Its opening time is saved when the previous one closes,
   and each device asks for a new snapshot at that moment.
 - The correct choice never leaves the server.
+- The leaderboard ranks both players from every completed quiz match across sessions. Equal scores
+  share a rank, and everyone tied at tenth appears.
 
 Known limits:
 

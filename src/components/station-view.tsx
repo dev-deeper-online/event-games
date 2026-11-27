@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { QuizMatch, StartMatch } from "@/components/quiz-view";
+import { QuizLeaderboard, QuizMatch, StartMatch } from "@/components/quiz-view";
 import { gameLabels, playerSlots, roleLabels, type Snapshot } from "@/lib/protocol";
 import { useStation, type Send, type Station } from "@/lib/use-station";
 
@@ -43,7 +43,7 @@ export function StationView({ code, role }: { code: string; role: string }) {
 }
 
 function Session({ snapshot, present, send }: { snapshot: Snapshot; present: Station["present"]; send: Send }) {
-  const { role, match } = snapshot;
+  const { role, match, leaderboard } = snapshot;
   const running = match !== null && match.phase !== "complete";
   const staff = role === "operator" || role === "display";
   // The display gives the whole screen to a running match.
@@ -61,6 +61,7 @@ function Session({ snapshot, present, send }: { snapshot: Snapshot; present: Sta
         </header>
       )}
       {match && <QuizMatch match={match} role={role} send={send} />}
+      {leaderboard && <QuizLeaderboard entries={leaderboard} />}
       {!matchOnly && (
         <>
           {(!running || role === "operator") && (

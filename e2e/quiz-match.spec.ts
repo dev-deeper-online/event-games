@@ -35,6 +35,13 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
   const player2 = await newDevice();
   await join(player2, code, "Player 2");
 
+  const idleOperator = await newDevice();
+  const idleCode = await createSession(idleOperator, "quiz");
+  const idleDisplay = await newDevice();
+  await join(idleDisplay, idleCode, "Display");
+  const idleLeaderboard = idleDisplay.getByRole("table", { name: "Event leaderboard" });
+  await expect(idleDisplay.getByRole("heading", { name: "Event leaderboard" })).toBeVisible();
+
   await startMatch(operator);
 
   let question = await shownQuestion(display, 1);
@@ -74,7 +81,14 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
       await shownQuestion(display, number);
       await expect(scores(display).filter({ hasText: "Bilal" })).not.toContainText(/Bilal\s*0$/);
     }
-    await choice(player1, question.right).click();
+    if (number === content.questionsPerMatch) {
+      await Promise.all([
+        idleDisplay.waitForResponse((response) => new URL(response.url()).pathname === "/api/snapshot" && response.ok()),
+        choice(player1, question.right).click(),
+      ]);
+    } else {
+      await choice(player1, question.right).click();
+    }
   }
   expect(new Set(prompts).size).toBe(content.questionsPerMatch);
 
@@ -83,6 +97,9 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
     await expect(scores(page).filter({ hasText: "Amira" })).toContainText(/Amira\s*[1-9]/);
     await expect(scores(page).filter({ hasText: "Bilal" })).toContainText(/Bilal\s*[1-9]/);
   }
+  const finalLeaderboard = display.getByRole("table", { name: "Event leaderboard" });
+  await expect(finalLeaderboard).toBeVisible();
+  await expect(idleLeaderboard.getByRole("row")).toHaveText(await finalLeaderboard.getByRole("row").allTextContents());
   await expect(startButton(operator)).toBeEnabled();
   for (const [name, page] of Object.entries({ display, operator, player1 })) {
     await testInfo.attach(`${name} match over`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });

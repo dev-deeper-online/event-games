@@ -52,7 +52,7 @@ for (const [elapsed, points] of [
   test(`a correct answer after ${elapsed}ms earns ${points} points`, async () => {
     const { player2, view, answer } = await running();
 
-    expect(await answer(player2, 1, rightChoice(await view(start)), start + elapsed)).toBeNull();
+    expect(await answer(player2, 1, rightChoice(await view(start)), start + elapsed)).toEqual({ completed: content.questionsPerMatch === 1 });
 
     const closed = await view(start + elapsed);
     expect(closed).toMatchObject({ phase: "closed", result: { scorer: "player2", points } });
@@ -95,7 +95,7 @@ test("simultaneous correct taps give the question to one player only", async () 
     [player1, player2, player1, player2].map((player) => answer(player, 1, choice, start + 2000)),
   );
 
-  expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(1);
+  expect(outcomes.filter((outcome) => "completed" in outcome)).toHaveLength(1);
   const closed = await view(start + 2000);
   expect(score(closed, "player1") + score(closed, "player2")).toBe(900);
 });
@@ -106,19 +106,19 @@ test("simultaneous taps from one player count once", async () => {
 
   const outcomes = await Promise.all(Array.from({ length: 4 }, () => answer(player1, 1, choice, start + 1000)));
 
-  expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(1);
+  expect(outcomes.filter((outcome) => "completed" in outcome)).toHaveLength(1);
 });
 
 test("a wrong answer locks out only the player who gave it", async () => {
   const { player1, player2, view, answer } = await running();
   const open = await view(start);
 
-  expect(await answer(player1, 1, wrongChoice(open), start + 1000)).toBeNull();
+  expect(await answer(player1, 1, wrongChoice(open), start + 1000)).toEqual({ completed: false });
 
   expect(await view(start + 1000, player1)).toMatchObject({ phase: "open", canAnswer: false });
   expect(await view(start + 1000, player2)).toMatchObject({ phase: "open", canAnswer: true });
   expect(await answer(player1, 1, rightChoice(open), start + 2000)).toMatchObject({ status: 409 });
-  expect(await answer(player2, 1, rightChoice(open), start + 4000)).toBeNull();
+  expect(await answer(player2, 1, rightChoice(open), start + 4000)).toEqual({ completed: content.questionsPerMatch === 1 });
   expect(await view(start + 4000)).toMatchObject({ result: { scorer: "player2", points: 800 } });
 });
 
@@ -178,7 +178,7 @@ test("the match ends after the configured number of distinct questions, keeping 
     const open = await view(now);
     expect(open).toMatchObject({ phase: "open", question: { number }, questionCount: content.questionsPerMatch });
     prompts.push(open.question.prompt);
-    expect(await answer(number % 2 ? player1 : player2, number, rightChoice(open), now)).toBeNull();
+    expect(await answer(number % 2 ? player1 : player2, number, rightChoice(open), now)).toEqual({ completed: number === content.questionsPerMatch });
     now += pause;
   }
 
