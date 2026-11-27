@@ -5,7 +5,7 @@ import content from "../../content/quiz.json";
 import { contentCheck } from "./content";
 import { db, isUniqueViolation, transaction } from "./db";
 import { isPlayer, playerSlots, type PlayerRole, type Role } from "./protocol/roles";
-import type { Match, Snapshot, StopReason } from "./protocol/snapshot";
+import type { Snapshot, StopReason } from "./protocol/snapshot";
 import type { Refusal } from "./refusal";
 import type { Device } from "./sessions";
 
@@ -270,12 +270,10 @@ export async function quizFor(sessionId: string, role: Role, now: number): Promi
   // Between questions the newest one is scheduled but not open yet, so the closed one before it still shows.
   const waitMs = latest.opens_at.getTime() - now;
   const shown = previous?.id && waitMs > 0 ? previous : latest;
+  const playerState = (player: PlayerRole) => ({ name: shown[column(player, "name")], score: shown[column(player, "score")] });
   const match = {
     id: shown.id,
-    players: Object.fromEntries(playerSlots.quiz.map((player) => [
-      player,
-      { name: shown[column(player, "name")], score: shown[column(player, "score")] },
-    ])) as Match["players"],
+    players: { player1: playerState("player1"), player2: playerState("player2") },
     questionCount: shown.question_count,
     question: { number: shown.position, prompt: shown.prompt, choices: shown.choices },
   };

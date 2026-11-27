@@ -1,6 +1,6 @@
 import { publishBudgetResultsChanged, publishChanged } from "@/lib/ably";
 import { saveBudgetAllocations, startBudgetRound, type BudgetSave } from "@/lib/budget";
-import { maxNameLength, playerName } from "@/lib/protocol/roles";
+import { maxNameLength, parsePlayerName } from "@/lib/protocol/roles";
 import { asDevice, refuse } from "@/lib/route";
 
 const roundIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -13,7 +13,7 @@ export const POST = (request: Request) => asDevice(request, async (device) => {
     if (device.role !== "operator") {
       return refuse({ error: "Only the operator can start a budget round.", status: 403 });
     }
-    const name = playerName(body.playerName);
+    const name = parsePlayerName(body.playerName);
     if (!name) {
       return refuse({ error: `Enter a player name up to ${maxNameLength} characters.`, status: 400 });
     }

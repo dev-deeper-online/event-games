@@ -33,7 +33,7 @@ export const isQuizDisplay = ({ gameType, role }: { gameType: GameType; role: Ro
 export const maxNameLength = 30;
 
 /** The name as it is saved, or null when it is not one a player can have. */
-export const playerName = (value: unknown) => {
+export const parsePlayerName = (value: unknown) => {
   const name = typeof value === "string" ? value.trim() : "";
   return name && name.length <= maxNameLength ? name : null;
 };
