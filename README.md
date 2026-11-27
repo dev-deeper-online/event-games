@@ -57,10 +57,18 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
   kept in the browser, so a reload keeps its seat. The joining browser creates the token,
   so a join can safely be retried when the reply is lost.
 - Postgres is the source of truth. After a change commits, the server publishes a `changed`
-  message on the session's Ably channel, and each device fetches a new snapshot.
+  message on Ably, and subscribed devices fetch a new snapshot. Budget confirmations use
+  the event-wide budget channel. Other changes use the session's channel.
   Devices also fetch one on every connect and reconnect.
-- Ably presence shows which devices are connected. A device's Ably token only lets it listen
-  on its own session's channel; only the server publishes.
+- Ably presence shows which devices are connected to each session. Budget devices also listen
+  for event-wide result changes. Only the server publishes.
+
+## How budget results work
+
+The deployment's database holds one event's rounds. The result compares each product's share
+with its average share across confirmed rounds in all budget sessions. Each round contributes
+equally using its saved budget and product names. A product absent from a round contributes zero
+for that round. Confirming a round refreshes results on connected budget devices.
 
 ## How a quiz match works
 

@@ -41,7 +41,13 @@ export function BudgetView({
             {round.config.products.map((product, index) => {
               const amount = round.allocations[index];
               const share = percent.format(amount / round.config.amount);
-              return <li key={product}><span>{product}</span><strong>{amount} ({share})</strong></li>;
+              return (
+                <li key={product}>
+                  <span>{product}</span>
+                  <strong>{amount} ({share})</strong>
+                  <span>Event average {percent.format(round.eventAverageShares[index])}</span>
+                </li>
+              );
             })}
           </ul>
         </section>

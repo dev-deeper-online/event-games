@@ -10,7 +10,7 @@ export type BudgetRound = {
   config: BudgetConfig;
 } & (
   | { phase: "editing"; allocations: number[] | null; draftVersion: number }
-  | { phase: "confirmed"; allocations: number[] }
+  | { phase: "confirmed"; allocations: number[]; eventAverageShares: number[] }
 );
 
 export const budgetTotal = (allocations: number[]) =>

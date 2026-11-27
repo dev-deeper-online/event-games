@@ -1,4 +1,4 @@
-import { publishChanged } from "@/lib/ably";
+import { publishBudgetResultsChanged, publishChanged } from "@/lib/ably";
 import { saveBudgetAllocations, startBudgetRound } from "@/lib/budget";
 import { maxNameLength } from "@/lib/protocol";
 import { authenticate } from "@/lib/sessions";
@@ -43,6 +43,6 @@ export async function POST(request: Request) {
     device.sessionId, body.roundId, body.allocations, confirm ? null : body.draftVersion,
   );
   if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
-  if (confirm) await publishChanged(device.code);
+  if (confirm) await publishBudgetResultsChanged();
   return Response.json({});
 }

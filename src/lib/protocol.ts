@@ -61,6 +61,7 @@ export const deviceTokenPattern = /^[0-9a-f]{64}$/;
 export const normalizeCode = (code: string) => code.replace(/\s/g, "").toUpperCase();
 
 export const channelName = (code: string) => `session:${code}`;
+export const budgetResultsChannel = "budget:results";
 
 /** Where a browser keeps its device token, so a reload keeps its seat. */
 export const tokenKey = (code: string, role: string) => `device:${code}:${role}`;

@@ -1,5 +1,5 @@
 import { createHttpClient, type PubSubHttpClient } from "@ably/pubsub-server";
-import { channelName } from "./protocol";
+import { budgetResultsChannel, channelName, type GameType } from "./protocol";
 
 let client: PubSubHttpClient | undefined;
 
@@ -9,11 +9,14 @@ const ably = () => {
   return (client ??= createHttpClient({ key: process.env.ABLY_API_KEY }));
 };
 
-/** Devices may listen and announce themselves on their own session's channel. Only the server publishes. */
-export const tokenRequestFor = (code: string, deviceId: string) =>
+/** Presence is scoped to a session. Budget devices can also receive event-wide result updates. */
+export const tokenRequestFor = (code: string, deviceId: string, gameType: GameType) =>
   ably().auth.createTokenRequest({
     clientId: deviceId,
-    capability: { [channelName(code)]: ["subscribe", "presence"] },
+    capability: {
+      [channelName(code)]: ["subscribe", "presence"],
+      ...(gameType === "budget" && { [budgetResultsChannel]: ["subscribe"] }),
+    },
   });
 
 /** Ids of the devices connected to a session's live channel right now. */
@@ -22,14 +25,17 @@ export async function presentDeviceIds(code: string) {
   return new Set(items.map((member) => member.clientId));
 }
 
+export const publishChanged = (code: string) => publishSnapshotChange(channelName(code));
+export const publishBudgetResultsChanged = () => publishSnapshotChange(budgetResultsChannel);
+
 /**
- * Tells a session's devices to fetch a new snapshot. Call after the change is committed.
- * A failure is logged and swallowed: the change is already saved, and devices catch up on their next snapshot.
+ * Tells subscribed devices to fetch a new snapshot after the change is committed.
+ * A failure is logged because the change is already saved and devices catch up on their next snapshot.
  */
-export async function publishChanged(code: string) {
+async function publishSnapshotChange(channel: string) {
   try {
-    await ably().channels.get(channelName(code)).publish("changed", null);
+    await ably().channels.get(channel).publish("changed", null);
   } catch (error) {
-    console.error(`Could not publish a change for session ${code}`, error);
+    console.error(`Could not publish a change on ${channel}`, error);
   }
 }

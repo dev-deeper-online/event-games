@@ -1,4 +1,84 @@
+import { db } from "../src/lib/db";
+import type { BudgetConfig } from "../src/lib/budget-state";
 import { createSession, expect, join, newToken, test } from "./station";
+
+// Confirmations in this file all contribute to the same event.
+test.describe.configure({ mode: "default" });
+
+test("a displayed result compares all confirmed rounds live and excludes an abandoned draft", async ({
+  page: operator, newDevice, request,
+}) => {
+  // Local runs can reuse a database. Treat any previously confirmed rounds as part of the fixture.
+  const { rows: baseline } = await db.query<{ config: BudgetConfig; allocations: number[] }>(
+    "select config, allocations from budget_rounds where confirmed_at is not null",
+  );
+
+  const code = await createSession(operator, "budget");
+  const display = await newDevice();
+  await join(display, code, "Display");
+
+  async function startRound(code: string, operatorToken: string, playerName: string) {
+    const playerToken = newToken();
+    expect((await request.post("/api/join", {
+      data: { code, role: "player1", token: playerToken },
+    })).ok()).toBeTruthy();
+    expect((await request.post("/api/budget", {
+      headers: { authorization: `Bearer ${operatorToken}` },
+      data: { action: "start", playerName },
+    })).ok()).toBeTruthy();
+    const headers = { authorization: `Bearer ${playerToken}` };
+    const snapshot = await request.get("/api/snapshot", { headers });
+    expect(snapshot.ok()).toBeTruthy();
+    const { budgetRound } = await snapshot.json();
+    return async (allocations: number[], action = "confirm") => {
+      expect((await request.post("/api/budget", {
+        headers, data: { action, roundId: budgetRound.id, allocations, draftVersion: 1 },
+      })).ok()).toBeTruthy();
+    };
+  }
+
+  async function startOtherRound(name: string) {
+    const created = await request.post("/api/sessions", { data: { gameType: "budget" } });
+    expect(created.ok()).toBeTruthy();
+    const { code, token } = await created.json();
+    return startRound(code, token, name);
+  }
+
+  const player = await newDevice();
+  await join(player, code, "Player 1");
+  await operator.getByLabel("Player name").fill("Alex");
+  await operator.getByRole("button", { name: "Start budget round" }).click();
+  await player.getByRole("slider", { name: "Headphones" }).press("End");
+  await player.getByRole("button", { name: "Confirm allocation" }).click();
+
+  const result = display.getByRole("list", { name: "Confirmed allocation" });
+  const productRow = (name: string) => result.getByRole("listitem").filter({ hasText: name });
+  const headphones = productRow("Headphones");
+  const format = new Intl.NumberFormat("en", { style: "percent", maximumFractionDigits: 2 });
+  async function expectAverage(product: string, addedShares: number, addedRounds: number) {
+    const previousShares = baseline.reduce((total, { config, allocations }) =>
+      total + (allocations[config.products.indexOf(product)] ?? 0) / config.amount, 0);
+    const average = format.format((previousShares + addedShares) / (baseline.length + addedRounds));
+    await expect(productRow(product).getByText(`Event average ${average}`, { exact: true })).toBeVisible();
+  }
+  await expect(headphones.getByText("1000 (100%)", { exact: true })).toBeVisible();
+  await expectAverage("Headphones", 1, 1);
+
+  const draft = await startOtherRound("Abandoned");
+  await draft([1000, 0, 0], "draft");
+  const second = await startOtherRound("Sam");
+  await second([0, 1000, 0]);
+  await expectAverage("Headphones", 1, 2);
+
+  const third = await startOtherRound("Taylor");
+  await third([500, 0, 500]);
+  await expectAverage("Headphones", 1.5, 3);
+  await expectAverage("Portable speaker", 1, 3);
+  await expectAverage("Power bank", 0.5, 3);
+  await expect(headphones.getByText("1000 (100%)", { exact: true })).toBeVisible();
+  await expect(display.getByRole("heading", { name: "Alex’s allocation" })).toBeVisible();
+});
+
 
 for (const viewport of [{ width: 375, height: 667 }, { width: 768, height: 1024 }]) {
   test(`a player can allocate and confirm on a ${viewport.width}px viewport`, async ({ page: operator, newDevice }) => {

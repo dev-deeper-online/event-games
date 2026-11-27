@@ -3,7 +3,7 @@
 import { createClient, type PubSubClient } from "@ably/pubsub-device";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postJson } from "./api-client";
-import { channelName, tokenKey, type Snapshot } from "./protocol";
+import { budgetResultsChannel, channelName, tokenKey, type Snapshot } from "./protocol";
 
 export type Station = {
   snapshot: Snapshot | null;
@@ -33,6 +33,7 @@ export function useStation(code: string, role: string): Station & { send: Send }
     let retry: ReturnType<typeof setTimeout> | undefined;
     let latest = 0;
     let stopped = false;
+    let watchingBudgetResults = false;
 
     const stop = () => {
       stopped = true;
@@ -58,6 +59,12 @@ export function useStation(code: string, role: string): Station & { send: Send }
         // Replies can arrive out of order; only the newest request may win.
         if (stopped || request !== latest) return;
         update({ snapshot });
+        if (snapshot.gameType === "budget" && realtime && !watchingBudgetResults) {
+          watchingBudgetResults = true;
+          const results = realtime.channels.get(budgetResultsChannel);
+          results.on(["attached", "update"], () => void refresh());
+          results.subscribe("changed", () => void refresh()).catch(console.error);
+        }
         // Nothing is published when the pause ends, so each device asks again when the next question opens.
         if (snapshot.match?.phase === "closed") retry = setTimeout(refresh, snapshot.match.nextInMs);
       } catch {

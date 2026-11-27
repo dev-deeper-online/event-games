@@ -16,22 +16,46 @@ type StoredRound = {
   config: BudgetConfig;
   allocations: number[];
   draftVersion: number;
-  confirmed: boolean;
-};
+} & (
+  | { confirmed: true; averageShares: Record<string, number> }
+  | { confirmed: false; averageShares: null }
+);
 
 export async function budgetRoundFor(sessionId: string, includeDraft: boolean): Promise<BudgetRound | null> {
+  // Count rounds before expanding products so a missing product contributes a zero share.
   const { rows: [round] } = await db.query<StoredRound>(
-    `select id, player_name as "playerName", config, allocations,
-            draft_version::float8 as "draftVersion", confirmed_at is not null as confirmed
-     from budget_rounds where session_id = $1 order by round_number desc limit 1`,
+    `with latest as (
+       select id, player_name, config, allocations, draft_version, confirmed_at
+       from budget_rounds where session_id = $1 order by round_number desc limit 1
+     )
+     select id, player_name as "playerName", config, allocations,
+            draft_version::float8 as "draftVersion", confirmed_at is not null as confirmed,
+            case when confirmed_at is not null then (
+              select jsonb_object_agg(product, average_share)
+              from (
+                select product,
+                       sum((rounds.allocations->>((position - 1)::int))::numeric / (rounds.config->>'amount')::numeric)
+                         / max(round_count) as average_share
+                from (
+                  select config, allocations, count(*) over () as round_count
+                  from budget_rounds where confirmed_at is not null
+                ) rounds
+                cross join lateral jsonb_array_elements_text(rounds.config->'products')
+                  with ordinality as products(product, position)
+                group by product
+              ) averages
+            ) end as "averageShares"
+     from latest`,
     [sessionId],
   );
   if (!round) return null;
 
-  const { confirmed, allocations, draftVersion, ...details } = round;
-  return confirmed
-    ? { ...details, phase: "confirmed", allocations }
-    : { ...details, phase: "editing", draftVersion, allocations: includeDraft ? allocations : null };
+  const { confirmed, allocations, draftVersion, averageShares, ...details } = round;
+  if (confirmed) {
+    const eventAverageShares = details.config.products.map((product) => averageShares[product]);
+    return { ...details, phase: "confirmed", allocations, eventAverageShares };
+  }
+  return { ...details, phase: "editing", draftVersion, allocations: includeDraft ? allocations : null };
 }
 
 export async function startBudgetRound(sessionId: string, playerName: string) {
