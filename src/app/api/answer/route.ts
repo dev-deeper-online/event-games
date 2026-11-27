@@ -15,8 +15,8 @@ export async function POST(request: Request) {
   }
 
   const refusal = await submitAnswer(device, { matchId, question, choice }, receivedAt);
+  if (!refusal || refusal.stopped) await publishChanged(device.code);
   if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
 
-  await publishChanged(device.code);
   return Response.json({}, { status: 201 });
 }

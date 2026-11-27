@@ -47,6 +47,19 @@ export function StartMatch({ ready, send }: { ready: boolean; send: Send }) {
   );
 }
 
+export function StopMatch({ matchId, send }: { matchId: string; send: Send }) {
+  const { run, pending, error } = useCommand(send);
+
+  return (
+    <>
+      {error && <p role="alert">{error}</p>}
+      <button type="button" disabled={pending} onClick={() => run("/api/match/stop", { matchId })}>
+        Stop match
+      </button>
+    </>
+  );
+}
+
 const outcome = ({ players, result }: Extract<Match, { result: unknown }>) =>
   result.scorer ? `${players[result.scorer].name} takes ${result.points} points` : "No points this time";
 

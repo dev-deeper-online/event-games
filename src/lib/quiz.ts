@@ -1,13 +1,14 @@
 /** The quiz state machine. The server owns it; `now` is always the server's clock, passed in so tests can set it. */
 import { randomInt } from "node:crypto";
+import type { PoolClient } from "pg";
 import content from "../../content/quiz.json";
 import { db, isUniqueViolation, transaction } from "./db";
-import { isPlayer, playerSlots, type Match, type PlayerRole, type Role } from "./protocol";
+import { isPlayer, playerSlots, type PlayerRole, type Role, type Snapshot, type StopReason } from "./protocol";
 import type { Refusal } from "./refusal";
 import type { Device } from "./sessions";
 
 /** Throws when the content file would produce a broken match. Runs on import, so a mistake fails the build. */
-export function checkContent({ questionsPerMatch, pauseSeconds, scoring, questions }: typeof content) {
+export function checkContent({ questionsPerMatch, pauseSeconds, disconnectGraceSeconds, scoring, questions }: typeof content) {
   const check = (valid: boolean, problem: string) => {
     if (!valid) throw new Error(`content/quiz.json: ${problem}`);
   };
@@ -19,6 +20,7 @@ export function checkContent({ questionsPerMatch, pauseSeconds, scoring, questio
     "questionsPerMatch must be a whole number from 1 to the number of questions",
   );
   check(amount(pauseSeconds), "pauseSeconds must be zero or more");
+  check(Number.isInteger(disconnectGraceSeconds) && disconnectGraceSeconds > 0, "disconnectGraceSeconds must be a positive whole number");
   check(
     [scoring.start, scoring.lostPerSecond, scoring.floor].every(amount) &&
       Number.isInteger(scoring.start) &&
@@ -37,6 +39,11 @@ export function checkContent({ questionsPerMatch, pauseSeconds, scoring, questio
   }
 }
 checkContent(content);
+
+export const matchRefreshInMs = () => Math.min(2000, Math.floor(content.disconnectGraceSeconds * 1000 / 3));
+// The grace period starts when the next check-in is due.
+const connectedUntil = (now: number) => new Date(now + matchRefreshInMs() + content.disconnectGraceSeconds * 1000);
+const stopNoticeMs = 5000;
 
 const pointsAfter = (elapsedMs: number) => {
   const { start, lostPerSecond, floor } = content.scoring;
@@ -61,8 +68,13 @@ export async function startMatch(
       const {
         rows: [match],
       } = await client.query<{ id: string }>(
-        "insert into matches (session_id, player1_name, player2_name) values ($1, $2, $3) returning id",
-        [sessionId, names.player1, names.player2],
+        `insert into matches (session_id, player1_name, player2_name, player1_connected_until, player2_connected_until)
+         values ($1, $2, $3, $4, $4) returning id`,
+        [sessionId, names.player1, names.player2, connectedUntil(now)],
+      );
+      await client.query(
+        "update sessions set quiz_stop_reason = null, quiz_stopped_at = null where id = $1 and quiz_stopped_at is not null",
+        [sessionId],
       );
       for (const [index, question] of draw(content.questions, content.questionsPerMatch).entries()) {
         await client.query(
@@ -84,24 +96,88 @@ export type Submission = { matchId: string; question: number; choice: number };
 
 const notOpen: Refusal = { error: "That question is not open.", status: 409 };
 
+async function discardMatch(client: PoolClient, sessionId: string, matchId: string, reason: StopReason, now: number) {
+  await client.query("delete from matches where id = $1", [matchId]);
+  await client.query(
+    "update sessions set quiz_stop_reason = $2, quiz_stopped_at = $3 where id = $1",
+    [sessionId, reason, new Date(now)],
+  );
+}
+
+async function lockRunningMatch(client: PoolClient, sessionId: string) {
+  const { rows: [match] } = await client.query<{
+    id: string;
+    player1_connected_until: Date | null;
+    player2_connected_until: Date | null;
+  }>(
+    `select id, player1_connected_until, player2_connected_until from matches
+     where session_id = $1 and completed_at is null for update`,
+    [sessionId],
+  );
+  return match;
+}
+
+type RunningMatch = NonNullable<Awaited<ReturnType<typeof lockRunningMatch>>>;
+
+function connectionExpired(match: RunningMatch, now: number) {
+  return [match.player1_connected_until, match.player2_connected_until]
+    .some((deadline) => deadline !== null && deadline.getTime() <= now);
+}
+
+export async function stopMatch({ sessionId, role }: Device, matchId: string, now: number): Promise<Refusal | null> {
+  if (role !== "operator") return { error: "Only the operator can stop a match.", status: 403 };
+
+  return transaction(async (client) => {
+    const match = await lockRunningMatch(client, sessionId);
+    if (match?.id !== matchId) return { error: "That match is no longer running.", status: 409 };
+    await discardMatch(client, sessionId, match.id, "operator", now);
+    return null;
+  });
+}
+
+/** An authenticated station refresh checks expiry before renewing its own player deadline. */
+export async function refreshMatchConnection(sessionId: string, now: number, player?: PlayerRole) {
+  return transaction(async (client) => {
+    const match = await lockRunningMatch(client, sessionId);
+    if (!match) return false;
+    if (connectionExpired(match, now)) {
+      await discardMatch(client, sessionId, match.id, "disconnect", now);
+      return true;
+    }
+
+    // A running match carried over from before this feature gets an initial grace period.
+    if (player || !match.player1_connected_until || !match.player2_connected_until) {
+      await client.query(
+        `update matches set
+           player1_connected_until = case when $3 = 'player1' then greatest(player1_connected_until, $2)
+             else coalesce(player1_connected_until, $2) end,
+           player2_connected_until = case when $3 = 'player2' then greatest(player2_connected_until, $2)
+             else coalesce(player2_connected_until, $2) end
+         where id = $1`,
+        [match.id, connectedUntil(now), player ?? null],
+      );
+    }
+    return false;
+  });
+}
+
 /** Accepts or refuses one tap. `receivedAt` is when it reached the server, which is what it is scored on. */
 export async function submitAnswer(
   { sessionId, role }: Device,
   { matchId, question, choice }: Submission,
   receivedAt: number,
-): Promise<Refusal | null> {
+): Promise<(Refusal & { stopped?: true }) | null> {
   if (!isPlayer(role)) return { error: "Only players can answer.", status: 403 };
 
   return transaction(async (client) => {
     // Locking the match makes competing taps take turns.
     // shortcut: taps a few ms apart are taken in lock order, not arrival order; hold and compare them if that matters.
-    const {
-      rows: [match],
-    } = await client.query<{ id: string }>(
-      "select id from matches where session_id = $1 and completed_at is null for update",
-      [sessionId],
-    );
+    const match = await lockRunningMatch(client, sessionId);
     if (match?.id !== matchId) return notOpen;
+    if (connectionExpired(match, receivedAt)) {
+      await discardMatch(client, sessionId, match.id, "disconnect", receivedAt);
+      return { ...notOpen, stopped: true };
+    }
 
     const {
       rows: [open],
@@ -168,24 +244,33 @@ type MatchRow = {
 };
 
 /** What a device may see of its station's latest match at `now`. Never includes a correct choice. */
-export async function matchFor(sessionId: string, role: Role, now: number): Promise<Match | null> {
+export async function quizFor(sessionId: string, role: Role, now: number): Promise<Pick<Snapshot, "match" | "stopNotice">> {
   // One statement, so the match and its questions are read as of the same moment.
   const {
     rows: [latest, previous],
-  } = await db.query<MatchRow>(
-    `select m.id, m.player1_name, m.player2_name, m.player1_score, m.player2_score, m.completed_at,
+  } = await db.query<MatchRow | { id: null; quiz_stopped_at: Date | null; quiz_stop_reason: StopReason | null }>(
+    `select s.quiz_stopped_at, s.quiz_stop_reason,
+       m.id, m.player1_name, m.player2_name, m.player1_score, m.player2_score, m.completed_at,
        (select count(*)::int from match_questions where match_id = m.id) as question_count,
        q.position, q.prompt, q.choices, q.opens_at, q.closed_at, q.locked_out, q.scorer, q.points
-     from (select * from matches where session_id = $1 order by created_at desc limit 1) m
-     join match_questions q on q.match_id = m.id and q.opens_at is not null
-     order by q.position desc limit 2`,
+     from sessions s
+     left join lateral (
+       select * from matches where session_id = s.id and s.quiz_stop_reason is null order by created_at desc limit 1
+     ) m on true
+     left join match_questions q on q.match_id = m.id and q.opens_at is not null
+     where s.id = $1 order by q.position desc limit 2`,
     [sessionId],
   );
-  if (!latest) return null;
+  if (!latest) return { match: null, stopNotice: null };
+  if (latest.id === null) {
+    const remainingMs = latest.quiz_stopped_at ? latest.quiz_stopped_at.getTime() + stopNoticeMs - now : 0;
+    const stopNotice = latest.quiz_stop_reason && remainingMs > 0 ? { reason: latest.quiz_stop_reason, remainingMs } : null;
+    return { match: null, stopNotice };
+  }
 
   // Between questions the newest one is scheduled but not open yet, so the closed one before it still shows.
   const waitMs = latest.opens_at.getTime() - now;
-  const shown = previous && waitMs > 0 ? previous : latest;
+  const shown = previous?.id && waitMs > 0 ? previous : latest;
   const match = {
     id: shown.id,
     players: {
@@ -196,7 +281,7 @@ export async function matchFor(sessionId: string, role: Role, now: number): Prom
     question: { number: shown.position, prompt: shown.prompt, choices: shown.choices },
   };
   const result = { scorer: shown.scorer, points: shown.points };
-  if (shown.completed_at) return { ...match, phase: "complete", result };
-  if (shown.closed_at) return { ...match, phase: "closed", result, nextInMs: waitMs };
-  return { ...match, phase: "open", canAnswer: isPlayer(role) && !shown.locked_out.includes(role) };
+  if (shown.completed_at) return { match: { ...match, phase: "complete", result }, stopNotice: null };
+  if (shown.closed_at) return { match: { ...match, phase: "closed", result, nextInMs: waitMs }, stopNotice: null };
+  return { match: { ...match, phase: "open", canAnswer: isPlayer(role) && !shown.locked_out.includes(role) }, stopNotice: null };
 }

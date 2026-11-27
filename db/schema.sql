@@ -36,6 +36,14 @@ create index if not exists matches_session on matches (session_id, created_at);
 -- One running match per station, enforced here so simultaneous starts cannot both win.
 create unique index if not exists matches_running on matches (session_id) where completed_at is null;
 
+alter table matches
+  add column if not exists player1_connected_until timestamptz,
+  add column if not exists player2_connected_until timestamptz;
+
+alter table sessions
+  add column if not exists quiz_stopped_at timestamptz,
+  add column if not exists quiz_stop_reason text check (quiz_stop_reason in ('operator', 'disconnect'));
+
 -- The questions drawn for a match, copied so that editing the content cannot change a match in progress.
 create table if not exists match_questions (
   match_id uuid not null references matches (id) on delete cascade,

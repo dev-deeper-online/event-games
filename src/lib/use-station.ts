@@ -50,7 +50,7 @@ export function useStation(code: string, role: string): Station & { send: Send }
       const request = ++latest;
       clearTimeout(retry);
       try {
-        const response = await fetch("/api/snapshot", { headers });
+        const response = await fetch("/api/snapshot", { method: "POST", headers });
         if (stopped) return;
         if (response.status === 401) return reject();
         if (!response.ok) throw new Error(`Snapshot failed with ${response.status}`);
@@ -58,8 +58,14 @@ export function useStation(code: string, role: string): Station & { send: Send }
         // Replies can arrive out of order; only the newest request may win.
         if (stopped || request !== latest) return;
         update({ snapshot });
-        // Nothing is published when the pause ends, so each device asks again when the next question opens.
-        if (snapshot.match?.phase === "closed") retry = setTimeout(refresh, snapshot.match.nextInMs);
+        // Refresh during a match to renew the player's connection and detect an expired deadline.
+        // A scheduled question or the end of a stop notice can call for an earlier refresh.
+        const nextRefresh = Math.min(
+          snapshot.refreshInMs ?? Infinity,
+          snapshot.match?.phase === "closed" ? snapshot.match.nextInMs : Infinity,
+          snapshot.stopNotice?.remainingMs ?? Infinity,
+        );
+        if (Number.isFinite(nextRefresh)) retry = setTimeout(refresh, nextRefresh);
       } catch {
         if (!stopped && request === latest) retry = setTimeout(refresh, 2000);
       }

@@ -33,7 +33,11 @@ export type Snapshot = {
   seats: { role: Role; deviceIds: string[] }[];
   /** The quiz station's running or last finished match. */
   match: Match | null;
+  stopNotice: { reason: StopReason; remainingMs: number } | null;
+  refreshInMs: number | null;
 };
+
+export type StopReason = "operator" | "disconnect";
 
 export const maxNameLength = 30;
 

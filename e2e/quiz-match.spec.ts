@@ -119,6 +119,30 @@ test("the server refuses a start or answer it should not accept", async ({ reque
   expect((await post("/api/answer", "forged", {})).status()).toBe(401);
 });
 
+test("the operator stops the match on every device and the display returns to idle", async ({ newDevice }) => {
+  const operator = await newDevice();
+  const code = await createSession(operator, "quiz");
+  const display = await newDevice();
+  const player1 = await newDevice();
+  const player2 = await newDevice();
+  await join(display, code, "Display");
+  await join(player1, code, "Player 1");
+  await join(player2, code, "Player 2");
+  await startMatch(operator);
+  await shownQuestion(display, 1);
+  await shownQuestion(player1, 1);
+  await shownQuestion(player2, 1);
+
+  await operator.getByRole("button", { name: "Stop match" }).click();
+
+  await expect(display.getByRole("heading", { name: "Match stopped" })).toBeVisible();
+  await expect(display.getByText("The operator ended the match.")).toBeVisible();
+  await expect(startButton(operator)).toBeEnabled();
+  await expect(player1.getByRole("group", { name: "Choices" })).toHaveCount(0);
+  await expect(player2.getByRole("group", { name: "Choices" })).toHaveCount(0);
+  await expect(display.getByRole("heading", { name: "Display" })).toBeVisible();
+});
+
 const viewports = {
   "small phone": { width: 320, height: 568 },
   "phone landscape": { width: 844, height: 390 },
