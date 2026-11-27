@@ -1,3 +1,5 @@
+import type { BudgetRound } from "./budget-state";
+
 /** What the browser and the server both need to agree on. */
 
 export const gameTypes = ["quiz", "budget"] as const;
@@ -25,17 +27,25 @@ export const roleLabels: Record<Role, string> = {
 
 export const gameLabels: Record<GameType, string> = { quiz: "Quiz", budget: "Budget" };
 
+export type LeaderboardEntry = { id: string; name: string; score: number; rank: number };
+
 /** The full state a device receives when it joins and whenever it reconnects. */
 export type Snapshot = {
   code: string;
   gameType: GameType;
   role: Role;
+  budgetRound: BudgetRound | null;
   seats: { role: Role; deviceIds: string[] }[];
   /** The quiz station's running or last finished match. */
   match: Match | null;
   stopNotice: { reason: StopReason; remainingMs: number } | null;
   refreshInMs: number | null;
+  /** Present on completed matches and on idle quiz displays. */
+  leaderboard?: LeaderboardEntry[];
 };
+
+export const isQuizDisplay = ({ gameType, role }: Pick<Snapshot, "gameType" | "role">) =>
+  gameType === "quiz" && role === "display";
 
 export type StopReason = "operator" | "disconnect";
 
@@ -50,7 +60,7 @@ export type Match = {
   questionCount: number;
   question: { number: number; prompt: string; choices: string[] };
 } & (
-  | { phase: "open"; canAnswer: boolean }
+  | { phase: "open"; canAnswer: boolean; retryId?: string }
   /** `nextInMs` is how long until the next question opens; devices fetch a snapshot then. */
   | { phase: "closed"; result: QuestionResult; nextInMs: number }
   | { phase: "complete"; result: QuestionResult }
@@ -61,7 +71,10 @@ export const deviceTokenPattern = /^[0-9a-f]{64}$/;
 
 export const normalizeCode = (code: string) => code.replace(/\s/g, "").toUpperCase();
 
+export const leaderboardChannel = "event:quiz-leaderboard";
+
 export const channelName = (code: string) => `session:${code}`;
+export const budgetResultsChannel = "budget:results";
 
 /** Where a browser keeps its device token, so a reload keeps its seat. */
 export const tokenKey = (code: string, role: string) => `device:${code}:${role}`;

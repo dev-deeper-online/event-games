@@ -1,4 +1,4 @@
--- Idempotent: db/migrate.mjs runs this file on every deploy.
+-- Idempotent so existing databases can adopt this baseline on their first versioned migration.
 create table if not exists sessions (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
@@ -36,14 +36,6 @@ create index if not exists matches_session on matches (session_id, created_at);
 -- One running match per station, enforced here so simultaneous starts cannot both win.
 create unique index if not exists matches_running on matches (session_id) where completed_at is null;
 
-alter table matches
-  add column if not exists player1_connected_until timestamptz,
-  add column if not exists player2_connected_until timestamptz;
-
-alter table sessions
-  add column if not exists quiz_stopped_at timestamptz,
-  add column if not exists quiz_stop_reason text check (quiz_stop_reason in ('operator', 'disconnect'));
-
 -- The questions drawn for a match, copied so that editing the content cannot change a match in progress.
 create table if not exists match_questions (
   match_id uuid not null references matches (id) on delete cascade,
@@ -59,3 +51,19 @@ create table if not exists match_questions (
   points integer not null default 0,
   primary key (match_id, position)
 );
+
+create table if not exists budget_rounds (
+  id uuid primary key default gen_random_uuid(),
+  round_number bigint generated always as identity,
+  session_id uuid not null references sessions (id) on delete cascade,
+  player_name text not null,
+  config jsonb not null,
+  allocations jsonb not null,
+  draft_version bigint not null default 0,
+  confirmed_at timestamptz
+);
+
+create index if not exists budget_rounds_session on budget_rounds (session_id, round_number desc);
+
+create unique index if not exists budget_rounds_active on budget_rounds (session_id)
+  where confirmed_at is null;

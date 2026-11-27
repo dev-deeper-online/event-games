@@ -3,7 +3,7 @@
 import { createClient, type PubSubClient } from "@ably/pubsub-device";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postJson } from "./api-client";
-import { channelName, tokenKey, type Snapshot } from "./protocol";
+import { budgetResultsChannel, channelName, isQuizDisplay, leaderboardChannel, tokenKey, type Snapshot } from "./protocol";
 
 export type Station = {
   snapshot: Snapshot | null;
@@ -33,6 +33,7 @@ export function useStation(code: string, role: string): Station & { send: Send }
     let retry: ReturnType<typeof setTimeout> | undefined;
     let latest = 0;
     let stopped = false;
+    let watchingEventResults = false;
 
     const stop = () => {
       stopped = true;
@@ -58,6 +59,14 @@ export function useStation(code: string, role: string): Station & { send: Send }
         // Replies can arrive out of order; only the newest request may win.
         if (stopped || request !== latest) return;
         update({ snapshot });
+        const eventChannel = snapshot.gameType === "budget" ? budgetResultsChannel
+          : isQuizDisplay(snapshot) ? leaderboardChannel : null;
+        if (eventChannel && realtime && !watchingEventResults) {
+          watchingEventResults = true;
+          const results = realtime.channels.get(eventChannel);
+          results.on(["attached", "update"], () => void refresh());
+          results.subscribe("changed", () => void refresh()).catch(console.error);
+        }
         // Refresh during a match to renew the player's connection and detect an expired deadline.
         // A scheduled question or the end of a stop notice can call for an earlier refresh.
         const nextRefresh = Math.min(

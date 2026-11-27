@@ -1,10 +1,11 @@
-import { publishChanged } from "@/lib/ably";
+import { publishChanged, publishLeaderboardChanged } from "@/lib/ably";
 import { submitAnswer } from "@/lib/quiz";
 import { authenticate } from "@/lib/sessions";
 
 export async function POST(request: Request) {
   // Read the clock first: this is the arrival time the answer is scored on.
   const receivedAt = Date.now();
+  const retryId = new URL(request.url).searchParams.get("retry") ?? undefined;
   const device = await authenticate(request);
   if (!device) return Response.json({ error: "Unknown device." }, { status: 401 });
 
@@ -14,9 +15,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Send a match, a question number and a choice." }, { status: 400 });
   }
 
-  const refusal = await submitAnswer(device, { matchId, question, choice }, receivedAt);
-  if (!refusal || refusal.stopped) await publishChanged(device.code);
-  if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
+  const result = await submitAnswer(device, { matchId, question, choice, retryId }, receivedAt);
+  if ("error" in result) {
+    if (result.stopped) await publishChanged(device.code);
+    return Response.json({ error: result.error }, { status: result.status });
+  }
 
+  await Promise.all([publishChanged(device.code), result.completed && publishLeaderboardChanged()]);
   return Response.json({}, { status: 201 });
 }
