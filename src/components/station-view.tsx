@@ -4,7 +4,9 @@ import Link from "next/link";
 import { BudgetView } from "@/components/budget-view";
 import { QuizLeaderboard, QuizMatch, StopMatch, useCommand } from "@/components/quiz-view";
 import { JoinPanel } from "@/components/qr-code";
-import { gameLabels, roleLabels, tokenKey, type Snapshot } from "@/lib/protocol";
+import { tokenKey, type StationRole } from "@/lib/protocol/device";
+import { gameLabels, roleLabels } from "@/lib/protocol/roles";
+import type { Snapshot } from "@/lib/protocol/snapshot";
 import { useStation, type Send, type Station } from "@/lib/use-station";
 
 const connectionLabels: Record<Station["connection"], string> = {
@@ -14,20 +16,22 @@ const connectionLabels: Record<Station["connection"], string> = {
   failed: "Connection failed. Reload the page.",
 };
 
-export function StationView({ code, role }: { code: string; role: string }) {
+export function NotJoined() {
+  return (
+    <main>
+      <h1>This device has not joined</h1>
+      <p>Scan the code on the display, or enter the session code, to take a seat.</p>
+      <Link className="button" href="/">
+        Join with a code
+      </Link>
+    </main>
+  );
+}
+
+export function StationView({ code, role }: { code: string; role: StationRole }) {
   const { snapshot, present, connection, rejected, send } = useStation(code, role);
 
-  if (rejected) {
-    return (
-      <main>
-        <h1>This device has not joined</h1>
-        <p>Scan the code on the display, or enter the session code, to take a seat.</p>
-        <Link className="button" href="/">
-          Join with a code
-        </Link>
-      </main>
-    );
-  }
+  if (rejected) return <NotJoined />;
 
   return (
     <main className={role === "display" ? "wide" : undefined}>

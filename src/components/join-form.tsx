@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
 import { postJson } from "@/lib/api-client";
-import { maxNameLength, normalizeCode, tokenKey } from "@/lib/protocol";
+import { normalizeCode, tokenKey } from "@/lib/protocol/device";
+import { maxNameLength } from "@/lib/protocol/roles";
 
 // getRandomValues also works on a plain http address, where randomUUID does not.
 const newDeviceToken = () =>

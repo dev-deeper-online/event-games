@@ -161,7 +161,7 @@ test("the server refuses an answer or stop it should not accept", async ({ reque
 
   // Only one of two players is Ready, so there is nothing to answer yet.
   expect((await readyByApi(request, player)).status()).toBe(201);
-  for (const data of [{}, { matchId: "x", question: 1.5, choice: 0 }, { matchId: "x", question: 1, choice: "0" }]) {
+  for (const data of [{}, { matchId: "x", question: 1.5, choice: 0 }, { matchId: "x", question: 1, choice: "0" }, { matchId: "x", question: 1, choice: 0, retryId: 1 }]) {
     expect((await post("/api/answer", player, data)).status()).toBe(400);
   }
   expect((await post("/api/answer", player, { matchId: "x", question: 1, choice: 0 })).status()).toBe(409);

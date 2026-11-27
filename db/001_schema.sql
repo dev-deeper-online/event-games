@@ -1,4 +1,4 @@
--- Idempotent so existing databases can adopt this baseline on their first versioned migration.
+-- Idempotent, because existing databases run this baseline again: it predates versioning and was once named schema.sql.
 create table if not exists sessions (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,

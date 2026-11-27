@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { postJson } from "@/lib/api-client";
-import { gameLabels, gameTypes, tokenKey, type GameType } from "@/lib/protocol";
+import { tokenKey } from "@/lib/protocol/device";
+import { gameLabels, gameTypes, type GameType } from "@/lib/protocol/roles";
 
 export function NewSession() {
   const router = useRouter();

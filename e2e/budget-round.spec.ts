@@ -1,7 +1,9 @@
 import type { APIRequestContext } from "@playwright/test";
+import content from "../content/budget.json";
+import { checkContent } from "../src/lib/budget";
 import { db } from "../src/lib/db";
 import type { BudgetConfig } from "../src/lib/budget-state";
-import { tokenKey } from "../src/lib/protocol";
+import { tokenKey } from "../src/lib/protocol/device";
 import {
   bearer, createSession, createSessionByApi, expect, join, joinByApi, readyButton, readyByApi, seatStatus, snapshotByApi, test,
 } from "./station";
@@ -214,4 +216,17 @@ test("the countdown blocks early saves; confirming frees the slot for a new gues
   await phone.getByRole("button", { name: "Play again" }).click();
   await expect(phone.getByText("You are in as Alex.")).toBeVisible();
   await expect(readyButton(phone)).toBeVisible();
+});
+
+test("content mistakes are reported", () => {
+  for (const broken of [
+    { ...content, amount: 0 },
+    { ...content, step: 0 },
+    { ...content, step: content.amount + 1 },
+    { ...content, products: [] },
+    { ...content, products: ["Headphones", " "] },
+    { ...content, products: ["Headphones", "Headphones"] },
+  ]) {
+    expect(() => checkContent(broken)).toThrow(/content\/budget\.json/);
+  }
 });

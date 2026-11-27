@@ -1,30 +1,5 @@
-import type { BudgetRound } from "./budget-state";
-
-/** What the browser and the server both need to agree on. */
-
-export const gameTypes = ["quiz", "budget"] as const;
-export type GameType = (typeof gameTypes)[number];
-
-export type PlayerRole = "player1" | "player2";
-
-export const playerSlots: Record<GameType, readonly PlayerRole[]> = {
-  quiz: ["player1", "player2"],
-  budget: ["player1"],
-};
-
-export const isPlayer = (role: Role): role is PlayerRole => role === "player1" || role === "player2";
-
-/** A guest is a player device whose round has ended. It keeps its token and its own last result. */
-export type Role = "display" | PlayerRole | "guest";
-
-export const roleLabels: Record<Role, string> = {
-  display: "Display",
-  player1: "Player 1",
-  player2: "Player 2",
-  guest: "Guest",
-};
-
-export const gameLabels: Record<GameType, string> = { quiz: "Quiz", budget: "Budget" };
+import type { BudgetRound } from "../budget-state";
+import type { GameType, PlayerRole, Role } from "./roles";
 
 export type LeaderboardEntry = { id: string; name: string; score: number; rank: number };
 
@@ -45,12 +20,7 @@ export type Snapshot = {
   leaderboard?: LeaderboardEntry[];
 };
 
-export const isQuizDisplay = ({ gameType, role }: Pick<Snapshot, "gameType" | "role">) =>
-  gameType === "quiz" && role === "display";
-
 export type StopReason = "display" | "disconnect";
-
-export const maxNameLength = 30;
 
 /** Who took a closed question. The correct choice is deliberately never part of it. */
 export type QuestionResult = { scorer: PlayerRole | null; points: number };
@@ -79,16 +49,3 @@ export type Match = {
 
 /** A match whose first question has opened. */
 export type ShownMatch = Exclude<Match, { phase: "countdown" }>;
-
-/** A device token the joining browser makes up itself: 32 random bytes as hex. */
-export const deviceTokenPattern = /^[0-9a-f]{64}$/;
-
-export const normalizeCode = (code: string) => code.replace(/\s/g, "").toUpperCase();
-
-export const leaderboardChannel = "event:quiz-leaderboard";
-
-export const channelName = (code: string) => `session:${code}`;
-export const budgetResultsChannel = "budget:results";
-
-/** Where a browser keeps its device token, so a reload keeps its seat. */
-export const tokenKey = (code: string, role: string) => `device:${code}:${role}`;

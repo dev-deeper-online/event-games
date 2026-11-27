@@ -1,17 +1,23 @@
 import config from "../../content/budget.json";
 import type { PoolClient } from "pg";
+import { contentCheck } from "./content";
 import { db, lockSession, releaseSeats, transaction } from "./db";
 import type { Refusal } from "./refusal";
 import { budgetTotal, validAllocations, type BudgetConfig, type BudgetRound } from "./budget-state";
 
-if (!Number.isSafeInteger(config.amount) || config.amount <= 0 ||
-    !Number.isSafeInteger(config.step) || config.step <= 0 || config.amount % config.step !== 0 ||
-    !config.products.length || config.products.some((product) => !product.trim()) ||
-    new Set(config.products).size !== config.products.length) {
-  throw new Error("content/budget.json requires a positive budget divisible by its step and unique product names.");
+/** Throws when the content file would produce a broken round. */
+export function checkContent({ amount, step, products }: BudgetConfig) {
+  const check = contentCheck("budget.json");
+  check(Number.isSafeInteger(amount) && amount > 0, "amount must be a positive whole number");
+  check(Number.isSafeInteger(step) && step > 0 && amount % step === 0, "step must be a positive whole number that divides amount");
+  check(
+    products.length > 0 && products.every((product) => product.trim() !== "") && new Set(products).size === products.length,
+    "products needs at least one name, none of them blank or repeated",
+  );
 }
+checkContent(config);
 for (const seconds of [config.countdownSeconds ?? 3, config.abandonSeconds ?? 60]) {
-  if (!(seconds >= 0)) throw new Error("content/budget.json: countdownSeconds and abandonSeconds must be zero or more.");
+  contentCheck("budget.json")(seconds >= 0, "countdownSeconds and abandonSeconds must be zero or more");
 }
 
 export const countdownMs = () => (config.countdownSeconds ?? 3) * 1000;
@@ -87,14 +93,17 @@ export async function startBudgetRound(client: PoolClient, sessionId: string, de
   );
 }
 
+/** A draft keeps the round open, and its version orders it among other drafts. Confirming seals the round. */
+export type BudgetSave = { action: "draft"; version: number } | { action: "confirm" };
+
 export async function saveBudgetAllocations(
   { sessionId, deviceId }: { sessionId: string; deviceId: string },
   roundId: string,
   allocations: unknown,
-  draftVersion: number | null,
+  save: BudgetSave,
   now: number,
 ): Promise<Refusal | null> {
-  const confirm = draftVersion === null;
+  const confirm = save.action === "confirm";
   return transaction(async (client) => {
     await lockSession(client, sessionId);
     // Only the device the round was started for may change it, so a guest's stale draft is refused.
@@ -110,6 +119,7 @@ export async function saveBudgetAllocations(
     }
 
     // Versions order drafts across reloads. Confirmation seals the round and can be retried with the same amounts.
+    // A null version is how the statement below tells a confirmation from a draft.
     const { rowCount } = await client.query(
       `update budget_rounds
        set allocations = $3, draft_version = coalesce($4::bigint, draft_version),
@@ -119,7 +129,7 @@ export async function saveBudgetAllocations(
            ($4::bigint is null and (confirmed_at is null or allocations = $3))
            or (confirmed_at is null and (draft_version < $4 or (draft_version = $4 and allocations = $3)))
          )`,
-      [sessionId, roundId, JSON.stringify(allocations), draftVersion],
+      [sessionId, roundId, JSON.stringify(allocations), save.action === "draft" ? save.version : null],
     );
     if (!rowCount) return { status: 409, error: "This budget round or draft has already changed." };
     // Only the confirmation that seals the round frees the slot; a retried one must not free the next player's.

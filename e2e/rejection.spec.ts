@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { db } from "../src/lib/db";
-import { tokenKey } from "../src/lib/protocol";
+import { tokenKey } from "../src/lib/protocol/device";
 import {
   bearer, createSession, createSessionByApi, expect, join, joinByApi, newToken, snapshotByApi, submitJoin, test,
 } from "./station";
@@ -86,6 +86,10 @@ test("a device that never joined cannot open a station page", async ({ newDevice
 
   await expect(stranger.getByRole("heading", { name: "This device has not joined" })).toBeVisible();
   await expect(stranger.getByTestId("join-code")).toHaveCount(0);
+
+  // An address naming no seat is turned away the same way.
+  await stranger.goto(`/session/${code}/referee`);
+  await expect(stranger.getByRole("heading", { name: "This device has not joined" })).toBeVisible();
 });
 
 test("simultaneous joins into an empty quiz station seat exactly two devices", async ({ request }) => {

@@ -3,7 +3,9 @@
 import { createClient, type PubSubClient } from "@ably/pubsub-device";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postJson } from "./api-client";
-import { budgetResultsChannel, channelName, isQuizDisplay, leaderboardChannel, tokenKey, type Snapshot } from "./protocol";
+import { channelName, eventChannelFor } from "./protocol/channels";
+import { tokenKey, type StationRole } from "./protocol/device";
+import type { Snapshot } from "./protocol/snapshot";
 
 export type Station = {
   snapshot: Snapshot | null;
@@ -20,7 +22,7 @@ export type Send = (url: string, body: unknown) => Promise<void>;
 const initial: Station = { snapshot: null, present: null, connection: "connecting", rejected: false };
 
 /** Keeps one device's view of its session current: snapshot on join and reconnect, then on every change. */
-export function useStation(code: string, role: string): Station & { send: Send } {
+export function useStation(code: string, role: StationRole): Station & { send: Send } {
   const [station, setStation] = useState(initial);
   const refreshNow = useRef<() => Promise<void>>(async () => {});
 
@@ -30,14 +32,14 @@ export function useStation(code: string, role: string): Station & { send: Send }
     const token = localStorage.getItem(key);
     const headers = { authorization: `Bearer ${token}` };
     let realtime: PubSubClient | undefined;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let latest = 0;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let latestRequest = 0;
     let stopped = false;
     let watchingEventResults = false;
 
     const stop = () => {
       stopped = true;
-      clearTimeout(retry);
+      clearTimeout(refreshTimer);
       realtime?.close();
     };
 
@@ -48,8 +50,8 @@ export function useStation(code: string, role: string): Station & { send: Send }
     };
 
     const refresh = async () => {
-      const request = ++latest;
-      clearTimeout(retry);
+      const request = ++latestRequest;
+      clearTimeout(refreshTimer);
       try {
         const response = await fetch("/api/snapshot", { method: "POST", headers });
         if (stopped) return;
@@ -57,10 +59,9 @@ export function useStation(code: string, role: string): Station & { send: Send }
         if (!response.ok) throw new Error(`Snapshot failed with ${response.status}`);
         const snapshot: Snapshot = await response.json();
         // Replies can arrive out of order; only the newest request may win.
-        if (stopped || request !== latest) return;
+        if (stopped || request !== latestRequest) return;
         update({ snapshot });
-        const eventChannel = snapshot.gameType === "budget" ? budgetResultsChannel
-          : isQuizDisplay(snapshot) ? leaderboardChannel : null;
+        const eventChannel = eventChannelFor(snapshot);
         if (eventChannel && realtime && !watchingEventResults) {
           watchingEventResults = true;
           const results = realtime.channels.get(eventChannel);
@@ -76,9 +77,9 @@ export function useStation(code: string, role: string): Station & { send: Send }
           snapshot.budgetRound?.phase === "countdown" ? snapshot.budgetRound.startsInMs : Infinity,
           snapshot.stopNotice?.remainingMs ?? Infinity,
         );
-        if (Number.isFinite(nextRefresh)) retry = setTimeout(refresh, nextRefresh);
+        if (Number.isFinite(nextRefresh)) refreshTimer = setTimeout(refresh, nextRefresh);
       } catch {
-        if (!stopped && request === latest) retry = setTimeout(refresh, 2000);
+        if (!stopped && request === latestRequest) refreshTimer = setTimeout(refresh, 2000);
       }
     };
 

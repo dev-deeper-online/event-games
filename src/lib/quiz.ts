@@ -2,8 +2,10 @@
 import { randomInt, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import content from "../../content/quiz.json";
+import { contentCheck } from "./content";
 import { db, lockSession, releaseSeats, transaction } from "./db";
-import { isPlayer, playerSlots, type PlayerRole, type Outcome, type Role, type Snapshot, type StopReason } from "./protocol";
+import { isPlayer, playerSlots, type PlayerRole, type Role } from "./protocol/roles";
+import type { Outcome, Snapshot, StopReason } from "./protocol/snapshot";
 import type { Refusal } from "./refusal";
 import type { Device } from "./sessions";
 
@@ -11,9 +13,7 @@ import type { Device } from "./sessions";
 export function checkContent({
   questionsPerMatch, pauseSeconds, disconnectGraceSeconds, countdownSeconds = 3, abandonSeconds = 60, leaderboardSize = 10, scoring, questions,
 }: typeof content) {
-  const check = (valid: boolean, problem: string) => {
-    if (!valid) throw new Error(`content/quiz.json: ${problem}`);
-  };
+  const check = contentCheck("quiz.json");
   const amount = (value: unknown) => typeof value === "number" && value >= 0;
   const text = (value: unknown) => typeof value === "string" && value.trim() !== "";
 
@@ -104,17 +104,18 @@ async function discardMatch(client: PoolClient, sessionId: string, matchId: stri
   await releaseSeats(client, sessionId);
 }
 
+/** A player's column in `matches`. */
+const column = <Field extends "name" | "score" | "device_id" | "connected_until">(player: PlayerRole, field: Field) =>
+  `${player}_${field}` as const;
+
 async function lockRunningMatch(client: PoolClient, sessionId: string) {
   // Session first, then match, in every transaction that ends a match.
   await lockSession(client, sessionId);
-  const { rows: [match] } = await client.query<{
-    id: string;
-    player1_device_id: string | null;
-    player2_device_id: string | null;
-    player1_connected_until: Date | null;
-    player2_connected_until: Date | null;
-  }>(
-    `select id, player1_device_id, player2_device_id, player1_connected_until, player2_connected_until from matches
+  const fields = ["device_id", "connected_until"] as const;
+  const { rows: [match] } = await client.query<
+    { id: string } & Record<`${PlayerRole}_device_id`, string | null> & Record<`${PlayerRole}_connected_until`, Date | null>
+  >(
+    `select id, ${playerSlots.quiz.flatMap((player) => fields.map((field) => column(player, field))).join(", ")} from matches
      where session_id = $1 and completed_at is null for update`,
     [sessionId],
   );
@@ -124,8 +125,10 @@ async function lockRunningMatch(client: PoolClient, sessionId: string) {
 type RunningMatch = NonNullable<Awaited<ReturnType<typeof lockRunningMatch>>>;
 
 function connectionExpired(match: RunningMatch, now: number) {
-  return [match.player1_connected_until, match.player2_connected_until]
-    .some((deadline) => deadline !== null && deadline.getTime() <= now);
+  return playerSlots.quiz.some((player) => {
+    const deadline = match[column(player, "connected_until")];
+    return deadline !== null && deadline.getTime() <= now;
+  });
 }
 
 export async function stopMatch({ sessionId, role }: Device, matchId: string, now: number): Promise<Refusal | null> {
@@ -150,14 +153,13 @@ export async function refreshMatchConnection(sessionId: string, now: number, pla
     }
 
     // A running match carried over from before this feature gets an initial grace period.
-    if (player || !match.player1_connected_until || !match.player2_connected_until) {
+    if (player || playerSlots.quiz.some((slot) => !match[column(slot, "connected_until")])) {
+      const renewals = playerSlots.quiz.map((slot) => {
+        const deadline = column(slot, "connected_until");
+        return `${deadline} = case when $3 = '${slot}' then greatest(${deadline}, $2) else coalesce(${deadline}, $2) end`;
+      });
       await client.query(
-        `update matches set
-           player1_connected_until = case when $3 = 'player1' then greatest(player1_connected_until, $2)
-             else coalesce(player1_connected_until, $2) end,
-           player2_connected_until = case when $3 = 'player2' then greatest(player2_connected_until, $2)
-             else coalesce(player2_connected_until, $2) end
-         where id = $1`,
+        `update matches set ${renewals.join(", ")} where id = $1`,
         [match.id, connectedUntil(now), player ?? null],
       );
     }
@@ -222,27 +224,19 @@ export async function submitAnswer(
       "update match_questions set opens_at = $3 where match_id = $1 and position = $2",
       [matchId, question + 1, new Date(receivedAt + content.pauseSeconds * 1000)],
     );
+    // A closing wrong answer adds its zero points.
+    const score = column(role, "score");
     await client.query(
-      `update matches set player1_score = player1_score + $2, player2_score = player2_score + $3, completed_at = $4
-       where id = $1`,
-      [
-        matchId,
-        role === "player1" ? points : 0,
-        role === "player2" ? points : 0,
-        hasNext ? null : new Date(receivedAt),
-      ],
+      `update matches set ${score} = ${score} + $2, completed_at = $3 where id = $1`,
+      [matchId, points, hasNext ? null : new Date(receivedAt)],
     );
     if (!hasNext) await releaseSeats(client, sessionId);
     return { completed: !hasNext };
   });
 }
 
-type MatchRow = {
+type MatchRow = Record<`${PlayerRole}_name`, string> & Record<`${PlayerRole}_score`, number> & {
   id: string;
-  player1_name: string;
-  player2_name: string;
-  player1_score: number;
-  player2_score: number;
   completed_at: Date | null;
   question_count: number;
   position: number;
@@ -289,12 +283,10 @@ export async function quizFor(sessionId: string, role: Role, deviceId: string, n
   // Between questions the newest one is scheduled but not open yet, so the closed one before it still shows.
   const waitMs = latest.opens_at.getTime() - now;
   const shown = previous?.id && waitMs > 0 ? previous : latest;
+  const playerState = (player: PlayerRole) => ({ name: shown[column(player, "name")], score: shown[column(player, "score")] });
   const match = {
     id: shown.id,
-    players: {
-      player1: { name: shown.player1_name, score: shown.player1_score },
-      player2: { name: shown.player2_name, score: shown.player2_score },
-    },
+    players: { player1: playerState("player1"), player2: playerState("player2") },
     questionCount: shown.question_count,
   };
   // Nothing before the first question has opened: the countdown. The question itself stays hidden until then.

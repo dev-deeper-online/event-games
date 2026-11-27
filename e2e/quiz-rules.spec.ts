@@ -2,7 +2,8 @@
 import { expect, test } from "@playwright/test";
 import content from "../content/quiz.json";
 import { db } from "../src/lib/db";
-import type { PlayerRole, ShownMatch } from "../src/lib/protocol";
+import type { PlayerRole } from "../src/lib/protocol/roles";
+import type { ShownMatch } from "../src/lib/protocol/snapshot";
 import { checkContent, countdownMs, stopMatch, submitAnswer, type Submission } from "../src/lib/quiz";
 import {
   authenticate, createSession, joinSession, liveSnapshotFor, markReady, snapshotFor, type Device,

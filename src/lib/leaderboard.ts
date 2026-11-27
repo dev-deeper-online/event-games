@@ -1,6 +1,6 @@
 import content from "../../content/quiz.json";
 import { db } from "./db";
-import type { LeaderboardEntry } from "./protocol";
+import type { LeaderboardEntry } from "./protocol/snapshot";
 
 /** Each completed quiz match already holds the two durable leaderboard entries. */
 export async function eventLeaderboard() {
