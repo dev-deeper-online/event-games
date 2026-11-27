@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { budgetRoundFor } from "./budget";
 import { db, isUniqueViolation } from "./db";
-import { playerSlots, roleLabels, type GameType, type JoinableRole, type Role, type Snapshot } from "./protocol";
+import { isQuizDisplay, playerSlots, roleLabels, type GameType, type JoinableRole, type Role, type Snapshot } from "./protocol";
+import { eventLeaderboard } from "./leaderboard";
 import { matchFor } from "./quiz";
 import type { Refusal } from "./refusal";
 
@@ -92,12 +93,15 @@ export async function snapshotFor(
     gameType === "quiz" ? matchFor(sessionId, role, now) : null,
     gameType === "budget" ? budgetRoundFor(sessionId, role === "player1") : null,
   ]);
+  const showLeaderboard = match?.phase === "complete" || (!match && isQuizDisplay({ gameType, role }));
+  const leaderboard = showLeaderboard ? await eventLeaderboard() : undefined;
   const seats: Role[] = ["operator", "display", ...playerSlots[gameType]];
   return {
     code,
     gameType,
     role,
     match,
+    leaderboard,
     budgetRound,
     seats: seats.map((seat) => ({
       role: seat,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, type FormEvent } from "react";
-import { isPlayer, maxNameLength, playerSlots, roleLabels, type Match, type Role } from "@/lib/protocol";
+import { isPlayer, maxNameLength, playerSlots, roleLabels, type LeaderboardEntry, type Match, type Role } from "@/lib/protocol";
 import type { Send } from "@/lib/use-station";
 
 /** Runs one command at a time, keeping the message from the last one that failed. */
@@ -128,5 +128,35 @@ function Choices({ match, send }: { match: Match; send: Send }) {
       {/* Once the question is settled for this player, a refused tap no longer needs explaining. */}
       {open && error && <p role="alert">{error}</p>}
     </>
+  );
+}
+
+export function QuizLeaderboard({ entries }: { entries: LeaderboardEntry[] }) {
+  return (
+    <section aria-labelledby="leaderboard-heading">
+      <h2 id="leaderboard-heading">Event leaderboard</h2>
+      {entries.length ? (
+        <table className="leaderboard" aria-labelledby="leaderboard-heading">
+          <thead>
+            <tr>
+              <th scope="col">Rank</th>
+              <th scope="col">Player</th>
+              <th scope="col">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(({ id, name, rank, score }) => (
+              <tr key={id}>
+                <td>{rank}</td>
+                <td>{name}</td>
+                <td>{score}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p>No completed matches yet.</p>
+      )}
+    </section>
   );
 }

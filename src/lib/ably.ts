@@ -1,5 +1,6 @@
 import { createHttpClient, type PubSubHttpClient } from "@ably/pubsub-server";
-import { budgetResultsChannel, channelName, type GameType } from "./protocol";
+import { budgetResultsChannel, channelName, isQuizDisplay, leaderboardChannel } from "./protocol";
+import type { Device } from "./sessions";
 
 let client: PubSubHttpClient | undefined;
 
@@ -9,13 +10,14 @@ const ably = () => {
   return (client ??= createHttpClient({ key: process.env.ABLY_API_KEY }));
 };
 
-/** Presence is scoped to a session. Budget devices can also receive event-wide result updates. */
-export const tokenRequestFor = (code: string, deviceId: string, gameType: GameType) =>
+/** Event-wide subscriptions depend on the game and device role. */
+export const tokenRequestFor = (device: Device) =>
   ably().auth.createTokenRequest({
-    clientId: deviceId,
+    clientId: device.deviceId,
     capability: {
-      [channelName(code)]: ["subscribe", "presence"],
-      ...(gameType === "budget" && { [budgetResultsChannel]: ["subscribe"] }),
+      [channelName(device.code)]: ["subscribe", "presence"],
+      ...(isQuizDisplay(device) ? { [leaderboardChannel]: ["subscribe"] } : {}),
+      ...(device.gameType === "budget" && { [budgetResultsChannel]: ["subscribe"] }),
     },
   });
 
@@ -27,6 +29,8 @@ export async function presentDeviceIds(code: string) {
 
 export const publishChanged = (code: string) => publishSnapshotChange(channelName(code));
 export const publishBudgetResultsChanged = () => publishSnapshotChange(budgetResultsChannel);
+
+export const publishLeaderboardChanged = () => publishSnapshotChange(leaderboardChannel);
 
 /**
  * Tells subscribed devices to fetch a new snapshot after the change is committed.

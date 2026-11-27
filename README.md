@@ -61,7 +61,8 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
   the event-wide budget channel. Other changes use the session's channel.
   Devices also fetch one on every connect and reconnect.
 - Ably presence shows which devices are connected to each session. Budget devices also listen
-  for event-wide result changes. Only the server publishes.
+  for event-wide result changes, and quiz displays listen for event-wide leaderboard changes.
+  Only the server publishes.
 
 ## How budget results work
 
@@ -79,6 +80,8 @@ for that round. Confirming a round refreshes results on connected budget devices
 - No server timer opens the next question. Its opening time is saved when the previous one closes,
   and each device asks for a new snapshot at that moment.
 - The correct choice never leaves the server.
+- The leaderboard ranks both players from every completed quiz match across sessions. Equal scores
+  share a rank, and everyone tied at tenth appears.
 
 Known limits:
 
