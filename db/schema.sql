@@ -1,4 +1,4 @@
--- Idempotent: db/migrate.mjs runs this file on every deploy.
+-- Idempotent so existing databases can adopt this baseline on their first versioned migration.
 create table if not exists sessions (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,

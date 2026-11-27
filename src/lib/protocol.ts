@@ -49,7 +49,7 @@ export type Match = {
   questionCount: number;
   question: { number: number; prompt: string; choices: string[] };
 } & (
-  | { phase: "open"; canAnswer: boolean }
+  | { phase: "open"; canAnswer: boolean; retryId?: string }
   /** `nextInMs` is how long until the next question opens; devices fetch a snapshot then. */
   | { phase: "closed"; result: QuestionResult; nextInMs: number }
   | { phase: "complete"; result: QuestionResult }

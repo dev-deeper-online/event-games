@@ -49,7 +49,7 @@ CI runs all of these on every push and reads the key from the `ABLY_API_KEY` rep
 2. In the project's Storage tab, add a Neon Postgres database. It sets `DATABASE_URL`.
    Pick the region closest to the venue, and set the same region under Settings > Functions.
 3. Under Settings > Environment Variables, add `ABLY_API_KEY` with the Ably app's root key.
-4. Deploy. The `vercel-build` script applies `db/schema.sql` before building.
+4. Deploy. The `vercel-build` script applies pending database migrations before building.
 
 ## How pairing and live sync work
 
@@ -73,7 +73,9 @@ for that round. Confirming a round refreshes results on connected budget devices
 ## How a quiz match works
 
 - The server serializes taps by locking the match row. An answer is scored on the time it reached the server.
-- A wrong answer locks out only the player who gave it. If both answer wrong, the question closes with no points.
+- A first wrong answer locks out that player and opens one retry for the opponent.
+  The opponent's next snapshot enables a fresh tap, scored from the original question opening.
+  If both answer wrong, the question closes with no points.
 - No server timer opens the next question. Its opening time is saved when the previous one closes,
   and each device asks for a new snapshot at that moment.
 - The correct choice never leaves the server.

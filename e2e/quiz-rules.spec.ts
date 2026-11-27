@@ -2,7 +2,7 @@
 import { expect, test } from "@playwright/test";
 import content from "../content/quiz.json";
 import type { PlayerRole, Role, Snapshot } from "../src/lib/protocol";
-import { checkContent, startMatch, submitAnswer } from "../src/lib/quiz";
+import { checkContent, startMatch, submitAnswer, type Submission } from "../src/lib/quiz";
 import { authenticate, createSession, joinSession, snapshotFor, type Device } from "../src/lib/sessions";
 import { newToken } from "./station";
 
@@ -33,8 +33,8 @@ async function running() {
   expect(await startMatch(operator, names, start)).toBeNull();
   const view = async (now: number, device: Device = display) => (await snapshotFor(device, now)).match!;
   const { id } = await view(start);
-  const answer = (device: Device, question: number, choice: number, at: number, matchId = id) =>
-    submitAnswer(device, { matchId, question, choice }, at);
+  const answer = (device: Device, question: number, choice: number, at: number, attempt?: Pick<Submission, "matchId" | "retryId">) =>
+    submitAnswer(device, { matchId: id, question, choice, ...attempt }, at);
   return { operator, display, player1, player2, view, answer };
 }
 
@@ -42,6 +42,11 @@ const rightChoice = (match: NonNullable<Snapshot["match"]>) =>
   content.questions.find((question) => question.prompt === match.question.prompt)!.answer;
 const wrongChoice = (match: NonNullable<Snapshot["match"]>) => (rightChoice(match) + 1) % match.question.choices.length;
 const score = (match: NonNullable<Snapshot["match"]>, role: PlayerRole) => match.players[role].score;
+
+function retryAttempt(match: NonNullable<Snapshot["match"]>) {
+  if (match.phase !== "open" || !match.retryId) throw new Error("Expected an open retry");
+  return { matchId: match.id, retryId: match.retryId };
+}
 
 for (const [elapsed, points] of [
   [0, 1000],
@@ -116,9 +121,30 @@ test("a wrong answer locks out only the player who gave it", async () => {
   expect(await answer(player1, 1, wrongChoice(open), start + 1000)).toBeNull();
 
   expect(await view(start + 1000, player1)).toMatchObject({ phase: "open", canAnswer: false });
-  expect(await view(start + 1000, player2)).toMatchObject({ phase: "open", canAnswer: true });
+  const retry = await view(start + 1000, player2);
+  expect(retry).toMatchObject({ phase: "open", canAnswer: true, question: open.question });
+  expect(await view(start + 1000)).not.toHaveProperty("retryId");
+  expect(await view(start + 1000, player1)).not.toHaveProperty("retryId");
   expect(await answer(player1, 1, rightChoice(open), start + 2000)).toMatchObject({ status: 409 });
-  expect(await answer(player2, 1, rightChoice(open), start + 4000)).toBeNull();
+  expect(await answer(player2, 1, rightChoice(open), start + 4000, retryAttempt(retry))).toBeNull();
+  expect(await view(start + 4000)).toMatchObject({ result: { scorer: "player2", points: 800 } });
+});
+
+test("a tap received before the retry opens cannot count as the retry", async () => {
+  const { player1, player2, view, answer } = await running();
+  const open = await view(start, player2);
+  expect(open).not.toHaveProperty("retryId");
+
+  expect(await answer(player1, 1, wrongChoice(open), start + 1000)).toBeNull();
+
+  // A queued tap still belongs to the original attempt, regardless of its arrival timestamp.
+  for (const receivedAt of [start + 999, start + 1000, start + 1500]) {
+    expect(await answer(player2, 1, rightChoice(open), receivedAt)).toMatchObject({ status: 409 });
+  }
+
+  const retry = retryAttempt(await view(start + 2000, player2));
+  expect(await answer(player2, 1, rightChoice(open), start + 4000, retry)).toBeNull();
+  expect(await answer(player2, 1, rightChoice(open), start + 4001, retry)).toMatchObject({ status: 409 });
   expect(await view(start + 4000)).toMatchObject({ result: { scorer: "player2", points: 800 } });
 });
 
@@ -126,8 +152,9 @@ test("two wrong answers close the question with no points", async () => {
   const { player1, player2, view, answer } = await running();
   const choice = wrongChoice(await view(start));
 
-  await answer(player1, 1, choice, start + 1000);
-  await answer(player2, 1, choice, start + 2000);
+  expect(await answer(player1, 1, choice, start + 1000)).toBeNull();
+  const retry = retryAttempt(await view(start + 1000, player2));
+  expect(await answer(player2, 1, choice, start + 2000, retry)).toBeNull();
 
   const closed = await view(start + 2000);
   expect(closed).toMatchObject({ phase: "closed", result: { scorer: null, points: 0 } });
@@ -159,7 +186,7 @@ test("stale and malformed submissions are rejected", async () => {
 
   expect(await answer(player1, 2, right, start)).toMatchObject({ status: 409 });
   expect(await answer(player1, 1, right, start - 1)).toMatchObject({ status: 409 });
-  expect(await answer(player1, 1, right, start, "another-match")).toMatchObject({ status: 409 });
+  expect(await answer(player1, 1, right, start, { matchId: "another-match" })).toMatchObject({ status: 409 });
   expect(await answer(player1, 1, open.question.choices.length, start)).toMatchObject({ status: 400 });
   expect(await answer(display, 1, right, start)).toMatchObject({ status: 403 });
   expect(await answer(operator, 1, right, start)).toMatchObject({ status: 403 });
