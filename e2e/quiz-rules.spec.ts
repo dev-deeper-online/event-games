@@ -1,10 +1,13 @@
 // Drives the server's submission interface with a controlled clock, against the real database.
 import { expect, test } from "@playwright/test";
 import content from "../content/quiz.json";
-import type { PlayerRole, Role } from "../src/lib/protocol/roles";
-import type { Snapshot } from "../src/lib/protocol/snapshot";
-import { checkContent, startMatch, stopMatch, submitAnswer, type Submission } from "../src/lib/quiz";
-import { authenticate, createSession, joinSession, liveSnapshotFor, snapshotFor, type Device } from "../src/lib/sessions";
+import { db } from "../src/lib/db";
+import type { PlayerRole } from "../src/lib/protocol/roles";
+import type { ShownMatch } from "../src/lib/protocol/snapshot";
+import { checkContent, countdownMs, stopMatch, submitAnswer, type Submission } from "../src/lib/quiz";
+import {
+  authenticate, createSession, joinSession, liveSnapshotFor, markReady, snapshotFor, type Device,
+} from "../src/lib/sessions";
 import { newToken } from "./station";
 
 // The default scoring numbers, pinned so that tuning the content file cannot fail these tests.
@@ -12,32 +15,38 @@ Object.assign(content.scoring, { start: 1000, lostPerSecond: 50, floor: 100 });
 
 const start = Date.parse("2026-01-01T12:00:00Z");
 const pause = content.pauseSeconds * 1000;
+const countdown = countdownMs();
 const grace = content.disconnectGraceSeconds * 1000;
 const names = { player1: "Amira", player2: "Bilal" };
+
+type Seated = Device & { token: string };
 
 async function station(gameType: "quiz" | "budget" = "quiz") {
   const { code, token } = await createSession(gameType);
   const device = async (deviceToken: string) =>
-    (await authenticate(new Request("http://test", { headers: { authorization: `Bearer ${deviceToken}` } }))) as Device;
-  const seat = async (role: Exclude<Role, "operator">) => {
+    ({ ...(await authenticate(new Request("http://test", { headers: { authorization: `Bearer ${deviceToken}` } }))), token: deviceToken }) as Seated;
+  /** A guest scans the code and takes the next free slot. */
+  const seat = async (name = "Guest") => {
     const seatToken = newToken();
-    await joinSession(code, role, seatToken);
+    expect(await joinSession(code, name, seatToken)).toBeNull();
     return device(seatToken);
   };
-  return { operator: await device(token), display: await seat("display"), seat };
+  return { code, display: await device(token), seat, device };
 }
 
-/** A running match, started at `start`. */
+/** A running match: both players pressed Ready at `start - countdown`, so the first question opens at `start`. */
 async function running() {
-  const { operator, display, seat } = await station();
-  const player1 = await seat("player1");
-  const player2 = await seat("player2");
-  expect(await startMatch(operator, names, start)).toBeNull();
-  const view = async (now: number, device: Device = display) => (await snapshotFor(device, now)).match!;
+  const { code, display, seat, device } = await station();
+  const player1 = await seat(names.player1);
+  const player2 = await seat(names.player2);
+  const matchStart = start - countdown;
+  expect(await markReady(player1, matchStart)).toBeNull();
+  expect(await markReady(player2, matchStart)).toBeNull();
+  const view = async (now: number, viewer: Device = display) => (await snapshotFor(viewer, now)).match as ShownMatch;
   const { id } = await view(start);
   const refreshInMs = (await snapshotFor(display, start)).refreshInMs!;
-  const firstDeadline = start + refreshInMs + grace;
-  let lastCheckIn = start;
+  const firstDeadline = matchStart + refreshInMs + grace;
+  let lastCheckIn = matchStart;
   const stayConnected = async (until: number) => {
     for (let now = lastCheckIn + refreshInMs; now <= until; now += refreshInMs) {
       await liveSnapshotFor(player1, now);
@@ -47,35 +56,47 @@ async function running() {
   };
   const answer = (device: Device, question: number, choice: number, at: number, attempt?: Pick<Submission, "matchId" | "retryId">) =>
     submitAnswer(device, { matchId: id, question, choice, ...attempt }, at);
-  return { operator, display, player1, player2, view, answer, firstDeadline, stayConnected };
+  return { code, display, player1, player2, seat, device, id, view, answer, firstDeadline, stayConnected, retryOf: retryAttempt };
 }
 
-const rightChoice = (match: NonNullable<Snapshot["match"]>) =>
-  content.questions.find((question) => question.prompt === match.question.prompt)!.answer;
-const wrongChoice = (match: NonNullable<Snapshot["match"]>) => (rightChoice(match) + 1) % match.question.choices.length;
-const score = (match: NonNullable<Snapshot["match"]>, role: PlayerRole) => match.players[role].score;
+/** The same device as it is now: a role changes when its round ends. */
+const current = async (device: Seated) =>
+  (await authenticate(new Request("http://test", { headers: { authorization: `Bearer ${device.token}` } }))) as Device;
 
-function retryAttempt(match: NonNullable<Snapshot["match"]>) {
+const rightChoice = (match: ShownMatch) =>
+  content.questions.find((question) => question.prompt === match.question.prompt)!.answer;
+const wrongChoice = (match: ShownMatch) => (rightChoice(match) + 1) % match.question.choices.length;
+const score = (match: ShownMatch, role: PlayerRole) => match.players[role].score;
+
+function retryAttempt(match: ShownMatch) {
   if (match.phase !== "open" || !match.retryId) throw new Error("Expected an open retry");
   return { matchId: match.id, retryId: match.retryId };
 }
 
-test("only the operator can discard a running match and the station can start again", async () => {
-  const { operator, display, player1, view, answer } = await running();
+test("only the display can discard a running match, and the freed station can start again", async () => {
+  const { display, player1, player2, view, answer, seat } = await running();
   const first = await view(start);
   expect(await answer(player1, 1, rightChoice(first), start)).toEqual({ completed: content.questionsPerMatch === 1 });
 
   expect(await stopMatch(player1, first.id, start + 1)).toMatchObject({ status: 403 });
-  expect(await stopMatch(operator, first.id, start + 1)).toBeNull();
-  expect(await snapshotFor(display, start + 1)).toMatchObject({ match: null, stopNotice: { reason: "operator" } });
+  expect(await stopMatch(display, first.id, start + 1)).toBeNull();
+  expect(await snapshotFor(display, start + 1)).toMatchObject({ match: null, stopNotice: { reason: "display" } });
   expect(await answer(player1, 1, 0, start + 2)).toMatchObject({ status: 409 });
   expect(await snapshotFor(display, start + 60_000)).toMatchObject({ match: null, stopNotice: null });
+  expect(await stopMatch(display, first.id, start + 60_001)).toMatchObject({ status: 409 });
 
-  expect(await startMatch(operator, names, start + 60_000)).toBeNull();
-  expect(await stopMatch(operator, first.id, start + 60_001)).toMatchObject({ status: 409 });
-  const next = await view(start + 60_001);
+  // Both slots are free: two new guests join, press Ready, and play a fresh match.
+  const next1 = await seat("Chidi");
+  const next2 = await seat("Dana");
+  expect([next1.role, next2.role]).toEqual(["player1", "player2"]);
+  expect(await markReady(next1, start + 60_000)).toBeNull();
+  expect(await markReady(next2, start + 60_000)).toBeNull();
+  const next = await view(start + 60_000 + countdown);
   expect(next.id).not.toBe(first.id);
   expect(score(next, "player1")).toBe(0);
+  expect(next.players.player1.name).toBe("Chidi");
+  // The stopped players keep no result of that match.
+  expect((await snapshotFor((await current(player2)), start + 60_000)).match).toBeNull();
 });
 
 test("a player who returns inside the grace period resumes with their answer lockout", async () => {
@@ -147,19 +168,24 @@ test("a question has no timeout", async () => {
 });
 
 test("no device is told which choice is correct", async () => {
-  const { operator, display, player1, view, answer } = await running();
+  const { display, player1, player2, view, answer, retryOf } = await running();
   const expectNoAnswer = async (now: number) => {
-    for (const device of [operator, display, player1]) {
+    for (const device of [display, player1, player2]) {
       const sent = await view(now, device);
       expect(Object.keys(sent.question).sort()).toEqual(["choices", "number", "prompt"]);
-      expect(JSON.stringify(sent)).not.toMatch(/"(answer|correct\w*)":/i);
+      for (const outcome of sent.outcomes) expect(Object.keys(outcome).sort()).toEqual(expect.arrayContaining(["id", "kind", "player"]));
+      expect(JSON.stringify(sent)).not.toMatch(/"(answer|correct\w*|chosen\w*|selected\w*|choice)":/i);
     }
   };
   await expectNoAnswer(start);
 
-  await answer(player1, 1, rightChoice(await view(start)), start + 1000);
+  // A wrong answer is announced to the display and the opponent without its choice.
+  const first = await view(start);
+  await answer(player1, 1, wrongChoice(first), start + 500);
+  await expectNoAnswer(start + 500);
+  expect((await view(start + 500, player2)).outcomes).toEqual([{ id: "1-0", player: "player1", kind: "wrong" }]);
 
-  await expectNoAnswer(start + 1000);
+  await answer(player2, 1, rightChoice(first), start + 1000, retryOf(await view(start + 500, player2)));
   expect(Object.keys(((await view(start + 1000)) as { result: object }).result).sort()).toEqual(["points", "scorer"]);
 });
 
@@ -193,6 +219,7 @@ test("a wrong answer locks out only the player who gave it", async () => {
   expect(await answer(player1, 1, wrongChoice(open), start + 1000)).toEqual({ completed: false });
 
   expect(await view(start + 1000, player1)).toMatchObject({ phase: "open", canAnswer: false });
+  expect((await view(start + 1000)).outcomes).toEqual([{ id: "1-0", player: "player1", kind: "wrong" }]);
   const retry = await view(start + 1000, player2);
   expect(retry).toMatchObject({ phase: "open", canAnswer: true, question: open.question });
   expect(await view(start + 1000)).not.toHaveProperty("retryId");
@@ -202,6 +229,11 @@ test("a wrong answer locks out only the player who gave it", async () => {
   await stayConnected(start + 4000);
   expect(await answer(player2, 1, rightChoice(open), start + 4000, retryAttempt(retry))).toEqual({ completed: content.questionsPerMatch === 1 });
   expect(await view(start + 4000)).toMatchObject({ result: { scorer: "player2", points: 800 } });
+  // Wrong then scoring: one list holds both, so a device that missed the state between them loses nothing.
+  expect((await view(start + 4000)).outcomes).toEqual([
+    { id: "1-0", player: "player1", kind: "wrong" },
+    { id: "1-1", player: "player2", kind: "scored", points: 800 },
+  ]);
 });
 
 test("a tap received before the retry opens cannot count as the retry", async () => {
@@ -234,6 +266,10 @@ test("two wrong answers close the question with no points", async () => {
 
   const closed = await view(start + 2000);
   expect(closed).toMatchObject({ phase: "closed", result: { scorer: null, points: 0 } });
+  expect(closed.outcomes).toEqual([
+    { id: "1-0", player: "player1", kind: "wrong" },
+    { id: "1-1", player: "player2", kind: "wrong" },
+  ]);
   expect([score(closed, "player1"), score(closed, "player2")]).toEqual([0, 0]);
 });
 
@@ -258,7 +294,7 @@ test("the next question opens by itself after the pause", async () => {
 });
 
 test("stale and malformed submissions are rejected", async () => {
-  const { operator, display, player1, view, answer } = await running();
+  const { display, player1, view, answer } = await running();
   const open = await view(start);
   const right = rightChoice(open);
 
@@ -267,7 +303,6 @@ test("stale and malformed submissions are rejected", async () => {
   expect(await answer(player1, 1, right, start, { matchId: "another-match" })).toMatchObject({ status: 409 });
   expect(await answer(player1, 1, open.question.choices.length, start)).toMatchObject({ status: 400 });
   expect(await answer(display, 1, right, start)).toMatchObject({ status: 403 });
-  expect(await answer(operator, 1, right, start)).toMatchObject({ status: 403 });
   expect(await view(start, player1)).toMatchObject({ phase: "open", canAnswer: true });
 
   await answer(player1, 1, right, start);
@@ -275,7 +310,7 @@ test("stale and malformed submissions are rejected", async () => {
 });
 
 test("the match ends after the configured number of distinct questions, keeping both scores", async () => {
-  const { operator, player1, player2, view, answer, stayConnected } = await running();
+  const { code, player1, player2, view, answer, stayConnected, seat } = await running();
   const prompts: string[] = [];
   let now = start;
 
@@ -299,25 +334,90 @@ test("the match ends after the configured number of distinct questions, keeping 
   });
   expect(await answer(player1, content.questionsPerMatch, 0, now)).toMatchObject({ status: 409 });
 
-  // The station is free for the next pair.
-  expect(await startMatch(operator, { player1: "Chidi", player2: "Dana" }, now)).toBeNull();
-  expect(await view(now)).toMatchObject({ phase: "open", players: { player1: { name: "Chidi", score: 0 } } });
+  // The slots are free, so old phones keep their own result and a new pair can start.
+  const finished = Object.fromEntries(
+    await Promise.all([player1, player2].map(async (player) => [player.token, await view(now, await current(player))])),
+  );
+  for (const player of [player1, player2]) {
+    expect((await current(player)).role).toBe("guest");
+    expect(finished[player.token]).toMatchObject({ phase: "complete", id: done.id });
+  }
+  const oldMatch = done.id;
+
+  // An old phone can play again: the same token reseats the same device in a free slot.
+  expect(await joinSession(code, "Amira", player1.token)).toBeNull();
+  const again = await current(player1);
+  expect([again.role, again.deviceId]).toEqual(["player1", player1.deviceId]);
+  const third = await seat("Chidi");
+  expect(third.role).toBe("player2");
+  // Both slots are taken again: a further guest is refused.
+  expect(await joinSession(code, "Late", newToken())).toMatchObject({ status: 409 });
+
+  expect(await markReady(again, now)).toBeNull();
+  expect(await markReady(third, now)).toBeNull();
+  const next = await view(now + countdown);
+  expect(next.id).not.toBe(oldMatch);
+  expect(next).toMatchObject({ phase: "open", players: { player1: { name: "Amira", score: 0 }, player2: { name: "Chidi" } } });
+
+  // The other old phone still shows its own finished match, and its answers to either match are refused.
+  expect(await view(now + countdown, await current(player2))).toMatchObject({ phase: "complete", id: oldMatch });
+  const stale = await current(player2);
+  expect(await submitAnswer(stale, { matchId: oldMatch, question: 1, choice: 0 }, now + countdown)).toMatchObject({ status: 409 });
+  expect(await submitAnswer(stale, { matchId: next.id, question: 1, choice: 0 }, now + countdown)).toMatchObject({ status: 409 });
 });
 
-test("only a quiz session can start a match, and only one at a time", async () => {
-  const { operator } = await running();
-  expect(await startMatch(operator, names, start)).toMatchObject({ status: 409 });
+test("Ready starts a match only when every slot is Ready", async () => {
+  const { display, seat } = await station();
+  const view = async (now: number) => (await snapshotFor(display, now)).match;
+  const player1 = await seat("Amira");
+  expect(await markReady(display, start)).toMatchObject({ status: 409 });
 
-  const budget = await station("budget");
-  expect(await startMatch(budget.operator, names, start)).toMatchObject({ status: 409 });
+  expect(await markReady(player1, start)).toBeNull();
+  // Pressing again changes nothing.
+  expect(await markReady(player1, start + 100)).toBeNull();
+  expect(await view(start + 100)).toBeNull();
+
+  const player2 = await seat("Bilal");
+  expect(await markReady(player2, start + 200)).toBeNull();
+  // The countdown shows on every device and reveals no question.
+  const counting = await view(start + 1000);
+  expect(counting).toMatchObject({ phase: "countdown", startsInMs: countdown - 800 });
+  expect(counting).not.toHaveProperty("question");
+  expect(await view(start + 200 + countdown)).toMatchObject({ phase: "open", question: { number: 1 } });
 });
 
-test("simultaneous starts create one match", async () => {
-  const { operator } = await station();
+test("answers during the countdown are refused", async () => {
+  const { player1, display } = await running();
+  const first = await snapshotFor(display, start);
+  const id = (first.match as ShownMatch).id;
 
-  const outcomes = await Promise.all(Array.from({ length: 4 }, () => startMatch(operator, names, start)));
+  expect(await submitAnswer(player1, { matchId: id, question: 1, choice: 0 }, start - 1)).toMatchObject({ status: 409 });
+});
 
-  expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(1);
+test("simultaneous Ready taps start exactly one match", async () => {
+  const { code, display, seat } = await station();
+  const [player1, player2] = [await seat("Amira"), await seat("Bilal")];
+
+  const outcomes = await Promise.all([markReady(player1, start), markReady(player2, start), markReady(player1, start), markReady(player2, start)]);
+
+  expect(outcomes).toEqual([null, null, null, null]);
+  const { rows: [{ count }] } = await db.query<{ count: number }>(
+    "select count(*)::int from matches m join sessions s on s.id = m.session_id where s.code = $1",
+    [code],
+  );
+  expect(count).toBe(1);
+  expect((await snapshotFor(display, start)).match).toMatchObject({ phase: "countdown" });
+});
+
+test("a budget station starts its round on one Ready", async () => {
+  const { seat, display } = await station("budget");
+  const player = await seat("Amira");
+  expect((await snapshotFor(display, start)).budgetRound).toBeNull();
+
+  expect(await markReady(player, start)).toBeNull();
+
+  expect((await snapshotFor(display, start)).budgetRound).toMatchObject({ phase: "countdown", startsInMs: countdown, playerName: "Amira" });
+  expect((await snapshotFor(display, start + countdown)).budgetRound).toMatchObject({ phase: "editing" });
 });
 
 test("content mistakes are reported", () => {
@@ -327,6 +427,9 @@ test("content mistakes are reported", () => {
     { ...content, questionsPerMatch: 0 },
     { ...content, pauseSeconds: -1 },
     { ...content, disconnectGraceSeconds: 0 },
+    { ...content, countdownSeconds: -1 },
+    { ...content, abandonSeconds: -1 },
+    { ...content, leaderboardSize: 0 },
     { ...content, scoring: { ...content.scoring, floor: content.scoring.start + 1 } },
     { ...content, questions: [...content.questions, question] },
     { ...content, questions: [{ ...question, answer: question.choices.length }] , questionsPerMatch: 1 },

@@ -4,8 +4,7 @@ import { createClient, type PubSubClient } from "@ably/pubsub-device";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { postJson } from "./api-client";
 import { channelName, eventChannelFor } from "./protocol/channels";
-import { tokenKey } from "./protocol/device";
-import type { Role } from "./protocol/roles";
+import { tokenKey, type StationRole } from "./protocol/device";
 import type { Snapshot } from "./protocol/snapshot";
 
 export type Station = {
@@ -23,7 +22,7 @@ export type Send = (url: string, body: unknown) => Promise<void>;
 const initial: Station = { snapshot: null, present: null, connection: "connecting", rejected: false };
 
 /** Keeps one device's view of its session current: snapshot on join and reconnect, then on every change. */
-export function useStation(code: string, role: Role): Station & { send: Send } {
+export function useStation(code: string, role: StationRole): Station & { send: Send } {
   const [station, setStation] = useState(initial);
   const refreshNow = useRef<() => Promise<void>>(async () => {});
 
@@ -70,10 +69,12 @@ export function useStation(code: string, role: Role): Station & { send: Send } {
           results.subscribe("changed", () => void refresh()).catch(console.error);
         }
         // Refresh during a match to renew the player's connection and detect an expired deadline.
-        // A scheduled question or the end of a stop notice can call for an earlier refresh.
+        // A scheduled question, the end of a countdown or of a stop notice can call for an earlier refresh.
         const nextRefresh = Math.min(
           snapshot.refreshInMs ?? Infinity,
           snapshot.match?.phase === "closed" ? snapshot.match.nextInMs : Infinity,
+          snapshot.match?.phase === "countdown" ? snapshot.match.startsInMs : Infinity,
+          snapshot.budgetRound?.phase === "countdown" ? snapshot.budgetRound.startsInMs : Infinity,
           snapshot.stopNotice?.remainingMs ?? Infinity,
         );
         if (Number.isFinite(nextRefresh)) refreshTimer = setTimeout(refresh, nextRefresh);

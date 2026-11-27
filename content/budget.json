@@ -1,5 +1,7 @@
 {
   "amount": 1000,
   "step": 100,
+  "countdownSeconds": 3,
+  "abandonSeconds": 60,
   "products": ["Headphones", "Portable speaker", "Power bank"]
 }

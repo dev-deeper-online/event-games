@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useTransition, type FormEvent } from "react";
-import { isPlayer, maxNameLength, playerSlots, roleLabels, type Role } from "@/lib/protocol/roles";
-import type { LeaderboardEntry, Match } from "@/lib/protocol/snapshot";
+import { useState, useTransition } from "react";
+import { Countdown } from "@/components/countdown";
+import { isPlayer, playerSlots, type Role } from "@/lib/protocol/roles";
+import type { LeaderboardEntry, Match, ShownMatch } from "@/lib/protocol/snapshot";
 import type { Send } from "@/lib/use-station";
 
 /** Runs one command at a time, keeping the message from the last one that failed. */
-function useCommand(send: Send) {
+export function useCommand(send: Send) {
   const [error, setError] = useState("");
   const [pending, startCommand] = useTransition();
   const run = (url: string, body: unknown) => {
@@ -22,32 +23,6 @@ function useCommand(send: Send) {
   return { run, pending, error };
 }
 
-export function StartMatch({ ready, send }: { ready: boolean; send: Send }) {
-  const { run, pending, error } = useCommand(send);
-
-  function start(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    run("/api/match", Object.fromEntries(new FormData(event.currentTarget)));
-  }
-
-  return (
-    <form onSubmit={start}>
-      {playerSlots.quiz.map((player) => (
-        <label key={player} className="field">
-          {roleLabels[player]} name
-          {/* The pattern refuses a name made of spaces only. */}
-          <input name={player} required pattern=".*\S.*" maxLength={maxNameLength} autoComplete="off" />
-        </label>
-      ))}
-      {!ready && <p className="hint">Both player devices must be connected before the match can start.</p>}
-      {error && <p role="alert">{error}</p>}
-      <button type="submit" disabled={!ready || pending}>
-        Start match
-      </button>
-    </form>
-  );
-}
-
 export function StopMatch({ matchId, send }: { matchId: string; send: Send }) {
   const { run, pending, error } = useCommand(send);
 
@@ -61,8 +36,26 @@ export function StopMatch({ matchId, send }: { matchId: string; send: Send }) {
   );
 }
 
-const outcome = ({ players, result }: Extract<Match, { result: unknown }>) =>
+type Played = Extract<Match, { result: unknown }>;
+
+const lastQuestion = ({ players, result }: Played) =>
   result.scorer ? `${players[result.scorer].name} takes ${result.points} points` : "No points this time";
+
+/** Every answer to the question so far, wrong or scoring. The choice itself is never part of it. */
+function Outcomes({ match }: { match: ShownMatch }) {
+  if (!match.outcomes.length) return null;
+  return (
+    <ul className="outcomes" aria-label="Answers">
+      {match.outcomes.map((outcome) => (
+        <li key={outcome.id} data-kind={outcome.kind}>
+          {outcome.kind === "wrong"
+            ? `${match.players[outcome.player].name} answered wrong`
+            : `${match.players[outcome.player].name} takes ${outcome.points} points`}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function Scores({ players }: { players: Match["players"] }) {
   return (
@@ -77,13 +70,24 @@ function Scores({ players }: { players: Match["players"] }) {
   );
 }
 
-/** The match as one device sees it. Players tap the choices; the display and operator only read them. */
+/** The match as one device sees it. Players tap the choices; the display only reads them. */
 export function QuizMatch({ match, role, send }: { match: Match; role: Role; send: Send }) {
+  if (match.phase === "countdown") {
+    return (
+      <section className="match">
+        <p className="eyebrow">Get ready</p>
+        <h2>
+          {match.players.player1.name} vs {match.players.player2.name}
+        </h2>
+        <Countdown startsInMs={match.startsInMs} />
+      </section>
+    );
+  }
   if (match.phase === "complete") {
     return (
       <section className="match">
         <h2>Match over</h2>
-        <p className="result">Last question: {outcome(match)}</p>
+        <p className="result">Last question: {lastQuestion(match)}</p>
         <Scores players={match.players} />
       </section>
     );
@@ -107,10 +111,9 @@ export function QuizMatch({ match, role, send }: { match: Match; role: Role; sen
           ))}
         </ol>
       )}
+      <Outcomes match={match} />
       {match.phase === "closed" ? (
-        <p className="result" role="status">
-          {outcome(match)}
-        </p>
+        !match.result.scorer && <p className="result">No points this time</p>
       ) : (
         player && !match.canAnswer && <p role="status">Wrong answer. Wait for the next question.</p>
       )}
@@ -119,7 +122,7 @@ export function QuizMatch({ match, role, send }: { match: Match; role: Role; sen
   );
 }
 
-function Choices({ match, send }: { match: Match; send: Send }) {
+function Choices({ match, send }: { match: ShownMatch; send: Send }) {
   const { run, pending, error } = useCommand(send);
   const open = match.phase === "open" && match.canAnswer;
   const retryId = match.phase === "open" ? match.retryId : undefined;
@@ -144,6 +147,10 @@ function Choices({ match, send }: { match: Match; send: Send }) {
   );
 }
 
+const ordinals = new Intl.PluralRules("en", { type: "ordinal" });
+const suffixes = { one: "st", two: "nd", few: "rd", other: "th", zero: "th", many: "th" };
+const ordinal = (rank: number) => `${rank}${suffixes[ordinals.select(rank)]}`;
+
 export function QuizLeaderboard({ entries }: { entries: LeaderboardEntry[] }) {
   return (
     <section aria-labelledby="leaderboard-heading">
@@ -160,7 +167,7 @@ export function QuizLeaderboard({ entries }: { entries: LeaderboardEntry[] }) {
           <tbody>
             {entries.map(({ id, name, rank, score }) => (
               <tr key={id}>
-                <td>{rank}</td>
+                <td className="rank" data-rank={rank}>{ordinal(rank)}</td>
                 <td>{name}</td>
                 <td>{score}</td>
               </tr>

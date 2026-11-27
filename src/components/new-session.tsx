@@ -13,12 +13,12 @@ export function NewSession() {
 
   function create(gameType: GameType) {
     setError("");
-    // Stays pending until the operator page is showing, so a second tap cannot create another session.
+    // Stays pending until the display is showing, so a second tap cannot create another session.
     startCreating(async () => {
       try {
         const { code, token } = await postJson<{ code: string; token: string }>("/api/sessions", { gameType });
-        localStorage.setItem(tokenKey(code, "operator"), token);
-        router.push(`/session/${code}/operator`);
+        localStorage.setItem(tokenKey(code, "display"), token);
+        router.push(`/session/${code}/display`);
       } catch (reason) {
         setError((reason as Error).message);
       }

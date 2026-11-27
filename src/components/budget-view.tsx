@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { Countdown } from "@/components/countdown";
 import { budgetTotal, validAllocations, type BudgetConfig, type BudgetRound } from "@/lib/budget-state";
-import { maxNameLength } from "@/lib/protocol/roles";
+import { isPlayer } from "@/lib/protocol/roles";
 import type { Snapshot } from "@/lib/protocol/snapshot";
 import type { Send, Station } from "@/lib/use-station";
 import styles from "./budget-view.module.css";
@@ -28,10 +29,8 @@ export function BudgetView({
   const { budgetRound: round, role } = snapshot;
 
   useEffect(() => {
-    if (role === "player1" && round?.phase === "confirmed") localStorage.removeItem(draftKey(round.id));
+    if (role !== "display" && round?.phase === "confirmed") localStorage.removeItem(draftKey(round.id));
   }, [role, round?.id, round?.phase]);
-
-  const playerJoined = snapshot.seats.some((seat) => seat.role === "player1" && seat.deviceIds.length > 0);
 
   return (
     <>
@@ -53,10 +52,13 @@ export function BudgetView({
           </ul>
         </section>
       )}
-      {role === "operator" && round?.phase !== "editing" && (
-        <StartRound key={round?.id} send={send} playerJoined={playerJoined} />
+      {round?.phase === "countdown" && (
+        <section className={styles.round}>
+          <p className="eyebrow">Get ready</p>
+          <h2>{round.playerName}’s budget</h2>
+          <Countdown startsInMs={round.startsInMs} />
+        </section>
       )}
-      {role === "operator" && round?.phase === "editing" && <p>{round.playerName} is allocating their budget.</p>}
       {role === "display" && round?.phase === "editing" && (
         <section className={styles.round}>
           <h2>{round.playerName}’s budget</h2>
@@ -65,43 +67,10 @@ export function BudgetView({
           </ul>
         </section>
       )}
-      {role === "player1" && !round && <p>You are in. Wait for the operator to start.</p>}
-      {role === "player1" && round?.phase === "editing" && round.allocations && (
+      {isPlayer(role) && round?.phase === "editing" && round.allocations && (
         <EditAllocation key={round.id} send={send} round={round} initial={round.allocations} connection={connection} />
       )}
     </>
-  );
-}
-
-function StartRound({ send, playerJoined }: { send: Send; playerJoined: boolean }) {
-  const [name, setName] = useState("");
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState("");
-
-  async function start(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (starting || !name.trim() || !playerJoined) return;
-    setStarting(true);
-    setError("");
-    try {
-      await send("/api/budget", { action: "start", playerName: name });
-    } catch (error) {
-      setError((error as Error).message);
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  return (
-    <form onSubmit={start}>
-      <label className="field">
-        Player name
-        <input required maxLength={maxNameLength} value={name} onChange={(event) => setName(event.target.value)} />
-      </label>
-      {!playerJoined && <p className="hint">Pair the player device to start.</p>}
-      <button disabled={starting || !playerJoined || !name.trim()}>Start budget round</button>
-      {error && <p role="alert">{error}</p>}
-    </form>
   );
 }
 

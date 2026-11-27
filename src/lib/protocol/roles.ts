@@ -14,18 +14,15 @@ export const playerSlots: Record<GameType, readonly PlayerRole[]> = {
 
 export const isPlayer = (role: Role): role is PlayerRole => role === "player1" || role === "player2";
 
-export const joinableRoles = ["display", "player1", "player2"] as const;
-export type JoinableRole = (typeof joinableRoles)[number];
-export type Role = "operator" | JoinableRole;
+/** A guest is a player device whose round has ended. It keeps its token and its own last result. */
+export type Role = "display" | PlayerRole | "guest";
 
 export const roleLabels: Record<Role, string> = {
-  operator: "Operator",
   display: "Display",
   player1: "Player 1",
   player2: "Player 2",
+  guest: "Guest",
 };
-
-export const isRole = (value: string): value is Role => Object.hasOwn(roleLabels, value);
 
 export const isQuizDisplay = ({ gameType, role }: { gameType: GameType; role: Role }) =>
   gameType === "quiz" && role === "display";

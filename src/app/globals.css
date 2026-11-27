@@ -40,6 +40,11 @@ main {
   padding: 1.5rem 1rem;
 }
 
+/* A shared display uses the width of the screen. */
+main.wide {
+  width: min(100%, 90rem);
+}
+
 h1 {
   font-size: clamp(1.75rem, 7vw, 2.5rem);
   line-height: 1.15;
@@ -164,6 +169,7 @@ button:disabled {
 }
 
 .match h2 {
+  overflow-wrap: anywhere;
   font-size: clamp(1.5rem, 6vw, 2rem);
   line-height: 1.25;
 }
@@ -300,4 +306,105 @@ button:disabled {
 
 .leaderboard :is(th, td):last-child {
   text-align: right;
+}
+
+.countdown {
+  font-size: clamp(5rem, 30vw, 14rem);
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.outcomes {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.outcomes li {
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.outcomes [data-kind="wrong"] {
+  color: var(--bad);
+}
+
+.outcomes [data-kind="scored"] {
+  color: var(--good);
+}
+
+.lobby {
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.seat-name {
+  margin-left: 0.5rem;
+}
+
+/* QR code and leaderboard side by side on a wide screen, stacked on a narrow one. */
+.idle {
+  display: grid;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (min-width: 60rem) {
+  .idle {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.join-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.qr {
+  width: min(100%, 22rem);
+  background: #ffffff;
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.join-panel a {
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.join-panel .code {
+  width: 100%;
+}
+
+.leaderboard .rank {
+  font-size: 1.25rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.leaderboard .rank[data-rank="1"] {
+  color: var(--good);
+  font-size: 1.75rem;
+}
+
+.leaderboard .rank[data-rank="2"],
+.leaderboard .rank[data-rank="3"] {
+  font-size: 1.5rem;
 }
