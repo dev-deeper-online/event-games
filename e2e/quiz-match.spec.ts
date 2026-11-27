@@ -147,7 +147,7 @@ test("the server refuses a start or answer it should not accept", async ({ reque
   expect((await post("/api/match", player, names)).status()).toBe(403);
   expect((await post("/api/match", "forged", names)).status()).toBe(401);
 
-  for (const data of [{}, { matchId: "x", question: 1.5, choice: 0 }, { matchId: "x", question: 1, choice: "0" }]) {
+  for (const data of [{}, { matchId: "x", question: 1.5, choice: 0 }, { matchId: "x", question: 1, choice: "0" }, { matchId: "x", question: 1, choice: 0, retryId: 1 }]) {
     expect((await post("/api/answer", player, data)).status()).toBe(400);
   }
   expect((await post("/api/answer", player, { matchId: "x", question: 1, choice: 0 })).status()).toBe(409);

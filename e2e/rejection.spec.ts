@@ -61,6 +61,10 @@ test("a device that never joined cannot open a station page", async ({ newDevice
 
   await expect(stranger.getByRole("heading", { name: "This device has not joined" })).toBeVisible();
   await expect(stranger.getByTestId("join-code")).toHaveCount(0);
+
+  // An address naming no seat is turned away the same way.
+  await stranger.goto(`/session/${code}/referee`);
+  await expect(stranger.getByRole("heading", { name: "This device has not joined" })).toBeVisible();
 });
 
 test("simultaneous joins give a player slot to one device only", async ({ request }) => {

@@ -2,7 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { budgetTotal, validAllocations, type BudgetConfig, type BudgetRound } from "@/lib/budget-state";
-import { maxNameLength, type Snapshot } from "@/lib/protocol";
+import { maxNameLength } from "@/lib/protocol/roles";
+import type { Snapshot } from "@/lib/protocol/snapshot";
 import type { Send, Station } from "@/lib/use-station";
 import styles from "./budget-view.module.css";
 

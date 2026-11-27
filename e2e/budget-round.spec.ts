@@ -1,3 +1,5 @@
+import content from "../content/budget.json";
+import { checkContent } from "../src/lib/budget";
 import { db } from "../src/lib/db";
 import type { BudgetConfig } from "../src/lib/budget-state";
 import { createSession, expect, join, newToken, test } from "./station";
@@ -175,4 +177,17 @@ test("the server rejects invalid distributions and keeps the confirmed result", 
   expect((await submit([0, 600, 400])).status()).toBe(409);
   expect((await submit([0, 0, 100], "draft")).status()).toBe(409);
   expect(await snapshot()).toMatchObject({ phase: "confirmed", playerName: "Sam", allocations: [400, 600, 0] });
+});
+
+test("content mistakes are reported", () => {
+  for (const broken of [
+    { ...content, amount: 0 },
+    { ...content, step: 0 },
+    { ...content, step: content.amount + 1 },
+    { ...content, products: [] },
+    { ...content, products: ["Headphones", " "] },
+    { ...content, products: ["Headphones", "Headphones"] },
+  ]) {
+    expect(() => checkContent(broken)).toThrow(/content\/budget\.json/);
+  }
 });

@@ -1,19 +1,16 @@
 import { publishChanged } from "@/lib/ably";
 import { stopMatch } from "@/lib/quiz";
-import { authenticate } from "@/lib/sessions";
+import { asDevice, refuse } from "@/lib/route";
 
-export async function POST(request: Request) {
-  const device = await authenticate(request);
-  if (!device) return Response.json({ error: "Unknown device." }, { status: 401 });
-
+export const POST = (request: Request) => asDevice(request, async (device) => {
   const body = await request.json().catch(() => null);
   if (typeof body?.matchId !== "string") {
-    return Response.json({ error: "Send the match to stop." }, { status: 400 });
+    return refuse({ error: "Send the match to stop.", status: 400 });
   }
 
   const refusal = await stopMatch(device, body.matchId, Date.now());
-  if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
+  if (refusal) return refuse(refusal);
 
   await publishChanged(device.code);
   return Response.json({});
-}
+});

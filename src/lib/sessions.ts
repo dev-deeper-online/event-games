@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { budgetRoundFor } from "./budget";
 import { db, isUniqueViolation } from "./db";
-import { isPlayer, isQuizDisplay, playerSlots, roleLabels, type GameType, type JoinableRole, type Role, type Snapshot } from "./protocol";
+import { isPlayer, isQuizDisplay, playerSlots, roleLabels, type GameType, type JoinableRole, type Role } from "./protocol/roles";
+import type { Snapshot } from "./protocol/snapshot";
 import { eventLeaderboard } from "./leaderboard";
 import { matchRefreshInMs, quizFor, refreshMatchConnection } from "./quiz";
 import type { Refusal } from "./refusal";
@@ -46,14 +47,14 @@ export async function joinSession(
     return { error: `This game has no ${roleLabels[role]}.`, status: 409 };
   }
 
-  const seat = [session.id, role, hash(token)];
+  const seatParams = [session.id, role, hash(token)];
   try {
-    await db.query("insert into devices (session_id, role, token_hash) values ($1, $2, $3)", seat);
+    await db.query("insert into devices (session_id, role, token_hash) values ($1, $2, $3)", seatParams);
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     const { rowCount } = await db.query(
       "select 1 from devices where session_id = $1 and role = $2 and token_hash = $3",
-      seat,
+      seatParams,
     );
     if (!rowCount) return { error: `${roleLabels[role]} is already taken.`, status: 409 };
   }

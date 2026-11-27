@@ -1,11 +1,7 @@
 import { tokenRequestFor } from "@/lib/ably";
-import { authenticate } from "@/lib/sessions";
+import { asDevice } from "@/lib/route";
 
-export async function GET(request: Request) {
-  const device = await authenticate(request);
-  if (!device) return Response.json({ error: "Unknown device." }, { status: 401 });
-
-  return Response.json(await tokenRequestFor(device), {
-    headers: { "cache-control": "no-store" },
-  });
-}
+export const GET = (request: Request) =>
+  asDevice(request, async (device) =>
+    Response.json(await tokenRequestFor(device), { headers: { "cache-control": "no-store" } }),
+  );
