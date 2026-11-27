@@ -25,3 +25,17 @@ export async function transaction<T>(work: (client: PoolClient) => Promise<T>) {
     throw error;
   }
 }
+
+/**
+ * Every seat change (join, reseat, Ready, start, release) takes this row lock first, so they run one
+ * after another per session and never race inside one transaction.
+ */
+export const lockSession = (client: PoolClient, sessionId: string) =>
+  client.query("select 1 from sessions where id = $1 for update", [sessionId]);
+
+/** A round has ended: its players become guests and the slots are free for the next ones. */
+export const releaseSeats = (client: PoolClient, sessionId: string) =>
+  client.query(
+    "update devices set role = 'guest', ready_at = null where session_id = $1 and role in ('player1', 'player2')",
+    [sessionId],
+  );

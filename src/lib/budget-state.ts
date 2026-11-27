@@ -9,6 +9,7 @@ export type BudgetRound = {
   playerName: string;
   config: BudgetConfig;
 } & (
+  | { phase: "countdown"; startsInMs: number }
   | { phase: "editing"; allocations: number[] | null; draftVersion: number }
   | { phase: "confirmed"; allocations: number[]; eventAverageShares: number[] }
 );

@@ -2,13 +2,15 @@
 import { randomInt, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import content from "../../content/quiz.json";
-import { db, isUniqueViolation, transaction } from "./db";
-import { isPlayer, playerSlots, type PlayerRole, type Role, type Snapshot, type StopReason } from "./protocol";
+import { db, lockSession, releaseSeats, transaction } from "./db";
+import { isPlayer, playerSlots, type PlayerRole, type Outcome, type Role, type Snapshot, type StopReason } from "./protocol";
 import type { Refusal } from "./refusal";
 import type { Device } from "./sessions";
 
 /** Throws when the content file would produce a broken match. Runs on import, so a mistake fails the build. */
-export function checkContent({ questionsPerMatch, pauseSeconds, disconnectGraceSeconds, scoring, questions }: typeof content) {
+export function checkContent({
+  questionsPerMatch, pauseSeconds, disconnectGraceSeconds, countdownSeconds = 3, abandonSeconds = 60, leaderboardSize = 10, scoring, questions,
+}: typeof content) {
   const check = (valid: boolean, problem: string) => {
     if (!valid) throw new Error(`content/quiz.json: ${problem}`);
   };
@@ -21,6 +23,9 @@ export function checkContent({ questionsPerMatch, pauseSeconds, disconnectGraceS
   );
   check(amount(pauseSeconds), "pauseSeconds must be zero or more");
   check(Number.isInteger(disconnectGraceSeconds) && disconnectGraceSeconds > 0, "disconnectGraceSeconds must be a positive whole number");
+  check(amount(countdownSeconds), "countdownSeconds must be zero or more");
+  check(amount(abandonSeconds), "abandonSeconds must be zero or more");
+  check(Number.isInteger(leaderboardSize) && leaderboardSize > 0, "leaderboardSize must be a positive whole number");
   check(
     [scoring.start, scoring.lostPerSecond, scoring.floor].every(amount) &&
       Number.isInteger(scoring.start) &&
@@ -40,6 +45,9 @@ export function checkContent({ questionsPerMatch, pauseSeconds, disconnectGraceS
 }
 checkContent(content);
 
+export const countdownMs = () => (content.countdownSeconds ?? 3) * 1000;
+export const abandonMs = () => (content.abandonSeconds ?? 60) * 1000;
+
 export const matchRefreshInMs = () => Math.min(2000, Math.floor(content.disconnectGraceSeconds * 1000 / 3));
 // The grace period starts when the next check-in is due.
 const connectedUntil = (now: number) => new Date(now + matchRefreshInMs() + content.disconnectGraceSeconds * 1000);
@@ -55,41 +63,32 @@ function draw<T>(items: readonly T[], count: number) {
   return Array.from({ length: count }, () => pool.splice(randomInt(pool.length), 1)[0]);
 }
 
-export async function startMatch(
-  { sessionId, role, gameType }: Device,
-  names: Record<PlayerRole, string>,
+/** Runs in the caller's transaction, which already holds the session lock. The first question opens after the countdown. */
+export async function startMatchWith(
+  client: PoolClient,
+  sessionId: string,
+  players: Record<PlayerRole, { id: string; name: string }>,
   now: number,
-): Promise<Refusal | null> {
-  if (role !== "operator") return { error: "Only the operator can start a match.", status: 403 };
-  if (gameType !== "quiz") return { error: "This is not a quiz session.", status: 409 };
-
-  try {
-    await transaction(async (client) => {
-      const {
-        rows: [match],
-      } = await client.query<{ id: string }>(
-        `insert into matches (session_id, player1_name, player2_name, player1_connected_until, player2_connected_until)
-         values ($1, $2, $3, $4, $4) returning id`,
-        [sessionId, names.player1, names.player2, connectedUntil(now)],
-      );
-      await client.query(
-        "update sessions set quiz_stop_reason = null, quiz_stopped_at = null where id = $1 and quiz_stopped_at is not null",
-        [sessionId],
-      );
-      for (const [index, question] of draw(content.questions, content.questionsPerMatch).entries()) {
-        await client.query(
-          `insert into match_questions (match_id, position, prompt, choices, correct_choice, opens_at)
-           values ($1, $2, $3, $4, $5, $6)`,
-          [match.id, index + 1, question.prompt, question.choices, question.answer, index ? null : new Date(now)],
-        );
-      }
-    });
-  } catch (error) {
-    // Here only the one-running-match index can be violated.
-    if (!isUniqueViolation(error)) throw error;
-    return { error: "A match is already running.", status: 409 };
+) {
+  const {
+    rows: [match],
+  } = await client.query<{ id: string }>(
+    `insert into matches (session_id, player1_name, player2_name, player1_device_id, player2_device_id,
+       player1_connected_until, player2_connected_until)
+     values ($1, $2, $3, $4, $5, $6, $6) returning id`,
+    [sessionId, players.player1.name, players.player2.name, players.player1.id, players.player2.id, connectedUntil(now)],
+  );
+  await client.query(
+    "update sessions set quiz_stop_reason = null, quiz_stopped_at = null where id = $1 and quiz_stopped_at is not null",
+    [sessionId],
+  );
+  for (const [index, question] of draw(content.questions, content.questionsPerMatch).entries()) {
+    await client.query(
+      `insert into match_questions (match_id, position, prompt, choices, correct_choice, opens_at)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [match.id, index + 1, question.prompt, question.choices, question.answer, index ? null : new Date(now + countdownMs())],
+    );
   }
-  return null;
 }
 
 export type Submission = { matchId: string; question: number; choice: number; retryId?: string };
@@ -102,15 +101,20 @@ async function discardMatch(client: PoolClient, sessionId: string, matchId: stri
     "update sessions set quiz_stop_reason = $2, quiz_stopped_at = $3 where id = $1",
     [sessionId, reason, new Date(now)],
   );
+  await releaseSeats(client, sessionId);
 }
 
 async function lockRunningMatch(client: PoolClient, sessionId: string) {
+  // Session first, then match, in every transaction that ends a match.
+  await lockSession(client, sessionId);
   const { rows: [match] } = await client.query<{
     id: string;
+    player1_device_id: string | null;
+    player2_device_id: string | null;
     player1_connected_until: Date | null;
     player2_connected_until: Date | null;
   }>(
-    `select id, player1_connected_until, player2_connected_until from matches
+    `select id, player1_device_id, player2_device_id, player1_connected_until, player2_connected_until from matches
      where session_id = $1 and completed_at is null for update`,
     [sessionId],
   );
@@ -125,12 +129,12 @@ function connectionExpired(match: RunningMatch, now: number) {
 }
 
 export async function stopMatch({ sessionId, role }: Device, matchId: string, now: number): Promise<Refusal | null> {
-  if (role !== "operator") return { error: "Only the operator can stop a match.", status: 403 };
+  if (role !== "display") return { error: "Only the display can stop a match.", status: 403 };
 
   return transaction(async (client) => {
     const match = await lockRunningMatch(client, sessionId);
     if (match?.id !== matchId) return { error: "That match is no longer running.", status: 409 };
-    await discardMatch(client, sessionId, match.id, "operator", now);
+    await discardMatch(client, sessionId, match.id, "display", now);
     return null;
   });
 }
@@ -163,17 +167,19 @@ export async function refreshMatchConnection(sessionId: string, now: number, pla
 
 /** Accepts or refuses one tap. `receivedAt` is when it reached the server, which is what it is scored on. */
 export async function submitAnswer(
-  { sessionId, role }: Device,
+  { sessionId, role, deviceId }: Device,
   { matchId, question, choice, retryId }: Submission,
   receivedAt: number,
 ): Promise<(Refusal & { stopped?: true }) | { completed: boolean }> {
+  // A guest's round is over, so whatever it answers is stale.
+  if (role === "guest") return notOpen;
   if (!isPlayer(role)) return { error: "Only players can answer.", status: 403 };
 
   return transaction(async (client) => {
     // Locking the match makes competing taps take turns.
     // shortcut: taps a few ms apart are taken in lock order, not arrival order; hold and compare them if that matters.
     const match = await lockRunningMatch(client, sessionId);
-    if (match?.id !== matchId) return notOpen;
+    if (match?.id !== matchId || match[`${role}_device_id`] !== deviceId) return notOpen;
     if (connectionExpired(match, receivedAt)) {
       await discardMatch(client, sessionId, match.id, "disconnect", receivedAt);
       return { ...notOpen, stopped: true };
@@ -226,6 +232,7 @@ export async function submitAnswer(
         hasNext ? null : new Date(receivedAt),
       ],
     );
+    if (!hasNext) await releaseSeats(client, sessionId);
     return { completed: !hasNext };
   });
 }
@@ -250,7 +257,7 @@ type MatchRow = {
 };
 
 /** What a device may see of its station's latest match at `now`. Never includes a correct choice. */
-export async function quizFor(sessionId: string, role: Role, now: number): Promise<Pick<Snapshot, "match" | "stopNotice">> {
+export async function quizFor(sessionId: string, role: Role, deviceId: string, now: number): Promise<Pick<Snapshot, "match" | "stopNotice">> {
   // One statement, so the match and its questions are read as of the same moment.
   const {
     rows: [latest, previous],
@@ -261,11 +268,16 @@ export async function quizFor(sessionId: string, role: Role, now: number): Promi
        q.position, q.prompt, q.choices, q.opens_at, q.closed_at, q.locked_out, q.scorer, q.points, q.retry_id
      from sessions s
      left join lateral (
-       select * from matches where session_id = s.id and s.quiz_stop_reason is null order by created_at desc limit 1
+       select * from matches where session_id = s.id and (
+         case when $2::uuid is null then s.quiz_stop_reason is null
+           else (player1_device_id = $2 or player2_device_id = $2) and ($3 or completed_at is null) end
+       ) order by created_at desc limit 1
      ) m on true
      left join match_questions q on q.match_id = m.id and q.opens_at is not null
      where s.id = $1 order by q.position desc limit 2`,
-    [sessionId],
+    // The display shows the station's latest match; a device only ever sees its own. Only a guest sees a finished
+    // one: a seated player has played again, so an older match is not its current one.
+    [sessionId, role === "display" ? null : deviceId, role === "guest"],
   );
   if (!latest) return { match: null, stopNotice: null };
   if (latest.id === null) {
@@ -284,15 +296,24 @@ export async function quizFor(sessionId: string, role: Role, now: number): Promi
       player2: { name: shown.player2_name, score: shown.player2_score },
     },
     questionCount: shown.question_count,
-    question: { number: shown.position, prompt: shown.prompt, choices: shown.choices },
   };
+  // Nothing before the first question has opened: the countdown. The question itself stays hidden until then.
+  if (!previous?.id && waitMs > 0) return { match: { ...match, phase: "countdown", startsInMs: waitMs }, stopNotice: null };
+
+  const outcomes: Outcome[] = shown.locked_out.map((player, index) => ({
+    id: `${shown.position}-${index}`, player, kind: "wrong",
+  }));
+  if (shown.scorer) {
+    outcomes.push({ id: `${shown.position}-${outcomes.length}`, player: shown.scorer, kind: "scored", points: shown.points });
+  }
+  const view = { ...match, question: { number: shown.position, prompt: shown.prompt, choices: shown.choices }, outcomes };
   const result = { scorer: shown.scorer, points: shown.points };
-  if (shown.completed_at) return { match: { ...match, phase: "complete", result }, stopNotice: null };
-  if (shown.closed_at) return { match: { ...match, phase: "closed", result, nextInMs: waitMs }, stopNotice: null };
+  if (shown.completed_at) return { match: { ...view, phase: "complete", result }, stopNotice: null };
+  if (shown.closed_at) return { match: { ...view, phase: "closed", result, nextInMs: waitMs }, stopNotice: null };
   const canAnswer = isPlayer(role) && !shown.locked_out.includes(role);
   return {
     match: {
-      ...match,
+      ...view,
       phase: "open",
       canAnswer,
       ...(canAnswer && shown.retry_id ? { retryId: shown.retry_id } : {}),

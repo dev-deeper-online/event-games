@@ -2,6 +2,9 @@
   "questionsPerMatch": 5,
   "pauseSeconds": 4,
   "disconnectGraceSeconds": 30,
+  "countdownSeconds": 3,
+  "abandonSeconds": 60,
+  "leaderboardSize": 10,
   "scoring": { "start": 1000, "lostPerSecond": 50, "floor": 100 },
   "questions": [
     { "prompt": "Which planet is closest to the Sun?", "choices": ["Venus", "Mercury", "Mars", "Earth"], "answer": 1 },

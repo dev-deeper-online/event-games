@@ -1,8 +1,8 @@
 import type { Page } from "@playwright/test";
 import content from "../content/quiz.json";
-import { createSession, createSessionByApi, expect, join, newToken, test } from "./station";
+import { db } from "../src/lib/db";
+import { bearer, createSession, createSessionByApi, expect, join, joinByApi, readyButton, readyByApi, test } from "./station";
 
-const startButton = (operator: Page) => operator.getByRole("button", { name: "Start match" });
 const choice = (page: Page, name: string) => page.getByRole("group", { name: "Choices" }).getByRole("button", { name, exact: true });
 const scores = (page: Page) => page.getByRole("list", { name: "Scores" }).getByRole("listitem");
 
@@ -19,31 +19,39 @@ async function shownQuestion(page: Page, number: number) {
   };
 }
 
-async function startMatch(operator: Page) {
-  await operator.getByLabel("Player 1 name").fill("Amira");
-  await operator.getByLabel("Player 2 name").fill("Bilal");
-  await startButton(operator).click();
+/** Two guests scan the code, enter their names and join; the first to join is Player 1. */
+async function seatPlayers(newDevice: () => Promise<Page>, code: string, names: [string, string] = ["Amira", "Bilal"]) {
+  const player1 = await newDevice();
+  await join(player1, code, names[0]);
+  const player2 = await newDevice();
+  await join(player2, code, names[1]);
+  return { player1, player2 };
 }
 
-test("two players race through a whole match", async ({ newDevice }, testInfo) => {
-  const operator = await newDevice();
-  const code = await createSession(operator, "quiz");
-  const display = await newDevice();
-  await join(display, code, "Display");
-  const player1 = await newDevice();
-  await join(player1, code, "Player 1");
-  await expect(startButton(operator)).toBeDisabled();
-  const player2 = await newDevice();
-  await join(player2, code, "Player 2");
+const answers = (page: Page) => page.getByRole("list", { name: "Answers" }).getByRole("listitem");
 
-  const idleOperator = await newDevice();
-  const idleCode = await createSession(idleOperator, "quiz");
+test("two players race through a whole match", async ({ newDevice }, testInfo) => {
+  const display = await newDevice();
+  const code = await createSession(display, "quiz");
+  const { player1, player2 } = await seatPlayers(newDevice, code);
+
   const idleDisplay = await newDevice();
-  await join(idleDisplay, idleCode, "Display");
+  await createSession(idleDisplay, "quiz");
   const idleLeaderboard = idleDisplay.getByRole("table", { name: "Event leaderboard" });
   await expect(idleDisplay.getByRole("heading", { name: "Event leaderboard" })).toBeVisible();
+  await expect(idleDisplay.getByRole("img", { name: "QR code to join" })).toBeVisible();
 
-  await startMatch(operator);
+  // The countdown waits for every slot to be Ready.
+  await readyButton(player1).click();
+  await expect(player1.getByText("Waiting for the other player.")).toBeVisible();
+  await expect(display.getByTestId("countdown")).toHaveCount(0);
+  await readyButton(player2).click();
+  for (const page of [display, player1, player2]) {
+    await expect(page.getByTestId("countdown")).toBeVisible();
+  }
+  // A phone that reloads mid-countdown recovers it from the server's start time.
+  await player1.reload();
+  await expect(player1.getByTestId("countdown")).toBeVisible();
 
   let question = await shownQuestion(display, 1);
   const displayChoices = display.getByRole("list", { name: "Choices" }).getByRole("listitem");
@@ -52,13 +60,17 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
     await expect(choice(player1, text)).toBeEnabled();
     await expect(choice(player2, text)).toBeEnabled();
   }
-  await expect(display.getByRole("button")).toHaveCount(0);
+  // The display only reads the choices; it can stop the match.
+  await expect(display.getByRole("group", { name: "Choices" })).toHaveCount(0);
+  await expect(display.getByRole("button")).toHaveText("Stop match");
 
   // A wrong tap locks out only the player who made it.
   await choice(player1, question.wrong).click();
   await expect(player1.getByText("Wrong answer. Wait for the next question.")).toBeVisible();
   await expect(choice(player1, question.right)).toBeDisabled();
   await expect(displayChoices).toHaveText(question.choices);
+  // The display and the opponent hear about it, without the choice.
+  for (const page of [display, player2]) await expect(answers(page)).toHaveText(["Amira answered wrong"]);
 
   // A reload mid-question recovers the question and who may answer it.
   await player1.reload();
@@ -70,10 +82,10 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
   }
 
   await choice(player2, question.right).click();
-  await expect(display.getByText(/^Bilal takes \d+ points$/)).toBeVisible();
+  await expect(answers(display)).toHaveText(["Amira answered wrong", /^Bilal takes \d+ points$/]);
   await expect(choice(player2, question.right)).toBeDisabled();
 
-  // The rest of the match advances without the operator.
+  // The rest of the match advances by itself.
   const prompts = [question.prompt];
   for (let number = 2; number <= content.questionsPerMatch; number++) {
     question = await shownQuestion(display, number);
@@ -87,6 +99,7 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
       await expect(player2.getByRole("heading", { level: 2 })).toHaveText(question.prompt);
       await choice(player2, question.wrong).click();
       await expect(display.getByText("No points this time")).toBeVisible();
+      await expect(answers(display)).toHaveText(["Amira answered wrong", "Bilal answered wrong"]);
       await expect(displayChoices).toHaveText(question.choices);
       await expect(scores(display)).toHaveText(scoresBefore);
       continue;
@@ -110,7 +123,7 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
   }
   expect(new Set(prompts).size).toBe(content.questionsPerMatch);
 
-  for (const page of [display, operator, player1, player2]) {
+  for (const page of [display, player1, player2]) {
     await expect(page.getByRole("heading", { name: "Match over" })).toBeVisible();
     await expect(scores(page).filter({ hasText: "Amira" })).toContainText(/Amira\s*[1-9]/);
     await expect(scores(page).filter({ hasText: "Bilal" })).toContainText(/Bilal\s*[1-9]/);
@@ -118,64 +131,78 @@ test("two players race through a whole match", async ({ newDevice }, testInfo) =
   const finalLeaderboard = display.getByRole("table", { name: "Event leaderboard" });
   await expect(finalLeaderboard).toBeVisible();
   await expect(idleLeaderboard.getByRole("row")).toHaveText(await finalLeaderboard.getByRole("row").allTextContents());
-  await expect(startButton(operator)).toBeEnabled();
-  for (const [name, page] of Object.entries({ display, operator, player1 })) {
+  for (const [name, page] of Object.entries({ display, player1 })) {
     await testInfo.attach(`${name} match over`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   }
+
+  // The slots are free again: the display still offers the QR code, and two new guests can play.
+  await expect(display.getByRole("img", { name: "QR code to join" })).toBeVisible();
+  await expect(player1.getByRole("button", { name: "Play again" })).toBeVisible();
+  const next = await seatPlayers(newDevice, code, ["Chidi", "Dana"]);
+  await readyButton(next.player1).click();
+  await readyButton(next.player2).click();
+  await shownQuestion(display, 1);
+  await shownQuestion(next.player1, 1);
+
+  // The old phones keep their own finished match and know nothing of the new one.
+  for (const page of [player1, player2]) {
+    await expect(page.getByRole("heading", { name: "Match over" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Choices" })).toHaveCount(0);
+  }
+  await expect(scores(player1).filter({ hasText: "Amira" })).toContainText(/Amira\s*[1-9]/);
+  await expect(scores(next.player1).filter({ hasText: "Chidi" })).toContainText(/Chidi\s*0/);
 });
 
-test("the server refuses a start or answer it should not accept", async ({ request }) => {
-  const { code, token } = await createSessionByApi(request);
-  const player = newToken();
-  for (const [role, deviceToken] of [
-    ["player1", player],
-    ["player2", newToken()],
-  ]) {
-    await request.post("/api/join", { data: { code, role, token: deviceToken } });
-  }
-  const post = (path: string, bearer: string, data: unknown) =>
-    request.post(path, { data, headers: { authorization: `Bearer ${bearer}` } });
-  const names = { player1: "Amira", player2: "Bilal" };
+test("the server refuses an answer or stop it should not accept", async ({ request }) => {
+  const { code, token: display } = await createSessionByApi(request);
+  const player = (await joinByApi(request, code, "Amira")).token;
+  await joinByApi(request, code, "Bilal");
+  const post = (path: string, token: string, data: unknown) => request.post(path, { data, headers: bearer(token) });
 
-  // Both seats are taken, but neither device is connected.
-  const offline = await post("/api/match", token, names);
-  expect([offline.status(), await offline.json()]).toEqual([409, { error: "Both player devices must be connected." }]);
-
-  for (const data of [{}, { ...names, player2: "   " }, { ...names, player1: "x".repeat(31) }, "not json"]) {
-    expect((await post("/api/match", token, data)).status()).toBe(400);
-  }
-  expect((await post("/api/match", player, names)).status()).toBe(403);
-  expect((await post("/api/match", "forged", names)).status()).toBe(401);
-
+  // Only one of two players is Ready, so there is nothing to answer yet.
+  expect((await readyByApi(request, player)).status()).toBe(201);
   for (const data of [{}, { matchId: "x", question: 1.5, choice: 0 }, { matchId: "x", question: 1, choice: "0" }]) {
     expect((await post("/api/answer", player, data)).status()).toBe(400);
   }
   expect((await post("/api/answer", player, { matchId: "x", question: 1, choice: 0 })).status()).toBe(409);
+  expect((await post("/api/answer", display, { matchId: "x", question: 1, choice: 0 })).status()).toBe(403);
   expect((await post("/api/answer", "forged", {})).status()).toBe(401);
+
+  expect((await post("/api/match/stop", display, {})).status()).toBe(400);
+  expect((await post("/api/match/stop", display, { matchId: "x" })).status()).toBe(409);
+  expect((await post("/api/match/stop", player, { matchId: "x" })).status()).toBe(403);
+  expect((await post("/api/match/stop", "forged", { matchId: "x" })).status()).toBe(401);
 });
 
-test("the operator stops the match on every device and the display returns to idle", async ({ newDevice }) => {
-  const operator = await newDevice();
-  const code = await createSession(operator, "quiz");
+test("the display stops the match on every device, nothing reaches the leaderboard and the slots are free", async ({ newDevice, request }) => {
   const display = await newDevice();
-  const player1 = await newDevice();
-  const player2 = await newDevice();
-  await join(display, code, "Display");
-  await join(player1, code, "Player 1");
-  await join(player2, code, "Player 2");
-  await startMatch(operator);
+  const code = await createSession(display, "quiz");
+  const { player1, player2 } = await seatPlayers(newDevice, code, ["Stopper One", "Stopper Two"]);
+  const idleDisplay = await newDevice();
+  await createSession(idleDisplay, "quiz");
+  await readyButton(player1).click();
+  await readyButton(player2).click();
   await shownQuestion(display, 1);
   await shownQuestion(player1, 1);
   await shownQuestion(player2, 1);
 
-  await operator.getByRole("button", { name: "Stop match" }).click();
+  await display.getByRole("button", { name: "Stop match" }).click();
 
   await expect(display.getByRole("heading", { name: "Match stopped" })).toBeVisible();
-  await expect(display.getByText("The operator ended the match.")).toBeVisible();
-  await expect(startButton(operator)).toBeEnabled();
+  await expect(display.getByText("The match was stopped.")).toBeVisible();
   await expect(player1.getByRole("group", { name: "Choices" })).toHaveCount(0);
   await expect(player2.getByRole("group", { name: "Choices" })).toHaveCount(0);
   await expect(display.getByRole("heading", { name: "Display" })).toBeVisible();
+  const { rows: [{ count }] } = await db.query<{ count: number }>(
+    "select count(*)::int from matches m join sessions s on s.id = m.session_id where s.code = $1",
+    [code],
+  );
+  expect(count).toBe(0);
+  await expect(idleDisplay.getByRole("table", { name: "Event leaderboard" })).not.toContainText("Stopper");
+
+  // The stopped players are guests; a new one can join the free slot.
+  await expect(player1.getByRole("button", { name: "Play again" })).toBeVisible();
+  expect((await joinByApi(request, code, "Chidi")).status).toBe(201);
 });
 
 const viewports = {
@@ -186,14 +213,14 @@ const viewports = {
 };
 
 test("the match screens fit phones, tablets and the display", async ({ newDevice }, testInfo) => {
-  const operator = await newDevice();
-  const code = await createSession(operator, "quiz");
   const display = await newDevice();
   await display.setViewportSize(viewports.display);
-  await join(display, code, "Display");
+  const code = await createSession(display, "quiz");
   const player1 = await newDevice();
-  await join(player1, code, "Player 1");
-  await join(await newDevice(), code, "Player 2");
+  // The longest name a guest can type, with nowhere to wrap.
+  await join(player1, code, "W".repeat(30));
+  const player2 = await newDevice();
+  await join(player2, code, "Bilal");
 
   const expectFits = async (page: Page, view: string, size: keyof typeof viewports) => {
     await page.setViewportSize(viewports[size]);
@@ -202,11 +229,12 @@ test("the match screens fit phones, tablets and the display", async ({ newDevice
     await testInfo.attach(`${view} - ${size}`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   };
 
-  await expectFits(operator, "operator idle", "small phone");
-  // The longest name the operator can type, with nowhere to wrap.
-  await operator.getByLabel("Player 1 name").fill("W".repeat(30));
-  await operator.getByLabel("Player 2 name").fill("Bilal");
-  await startButton(operator).click();
+  await expectFits(display, "display idle", "display");
+  await expectFits(player1, "player lobby", "small phone");
+  await readyButton(player1).click();
+  await readyButton(player2).click();
+  await expect(player1.getByTestId("countdown")).toBeVisible();
+  await expectFits(player1, "player countdown", "small phone");
 
   const { right } = await shownQuestion(display, 1);
   await expectFits(display, "display open", "display");
@@ -216,7 +244,6 @@ test("the match screens fit phones, tablets and the display", async ({ newDevice
     await shownQuestion(player1, 1);
     await expectFits(player1, "player open", size);
   }
-  await expectFits(operator, "operator running", "small phone");
 
   await choice(player1, right).click();
   await expect(display.getByText(/takes \d+ points$/)).toBeVisible();

@@ -68,10 +68,12 @@ export function useStation(code: string, role: string): Station & { send: Send }
           results.subscribe("changed", () => void refresh()).catch(console.error);
         }
         // Refresh during a match to renew the player's connection and detect an expired deadline.
-        // A scheduled question or the end of a stop notice can call for an earlier refresh.
+        // A scheduled question, the end of a countdown or of a stop notice can call for an earlier refresh.
         const nextRefresh = Math.min(
           snapshot.refreshInMs ?? Infinity,
           snapshot.match?.phase === "closed" ? snapshot.match.nextInMs : Infinity,
+          snapshot.match?.phase === "countdown" ? snapshot.match.startsInMs : Infinity,
+          snapshot.budgetRound?.phase === "countdown" ? snapshot.budgetRound.startsInMs : Infinity,
           snapshot.stopNotice?.remainingMs ?? Infinity,
         );
         if (Number.isFinite(nextRefresh)) retry = setTimeout(refresh, nextRefresh);

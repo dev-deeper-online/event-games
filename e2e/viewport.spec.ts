@@ -1,4 +1,4 @@
-import { createSession, expect, join, test } from "./station";
+import { createSession, expect, readyButton, submitJoin, test } from "./station";
 
 const viewports = {
   "small phone": { width: 320, height: 568 },
@@ -21,12 +21,33 @@ for (const [name, viewport] of Object.entries(viewports)) {
     };
 
     await player.goto("/");
-    await expect(player.getByRole("button", { name: "Join" })).toBeVisible();
-    await expectNoOverflow("join");
+    await expect(player.getByRole("button", { name: "Continue" })).toBeVisible();
+    await expectNoOverflow("home");
 
-    await join(player, code, "Player 1");
-    await expect(player.getByTestId("join-code")).toBeInViewport();
+    await submitJoin(player, code, "W".repeat(30));
+    await expect(player.getByText("You are in as")).toBeVisible();
+    await expect(readyButton(player)).toBeInViewport();
     await expect(player.getByRole("status")).toBeInViewport();
     await expectNoOverflow("player");
   });
 }
+
+test("the idle quiz display puts the QR code and leaderboard side by side, and stacks them on a narrow screen", async ({ newDevice }, testInfo) => {
+  const display = await newDevice();
+  await display.setViewportSize({ width: 1920, height: 1080 });
+  await createSession(display, "quiz");
+  const qr = display.getByRole("img", { name: "QR code to join" });
+  const leaderboard = display.getByRole("heading", { name: "Event leaderboard" });
+  await expect(qr).toBeVisible();
+  await expect(leaderboard).toBeVisible();
+
+  const [qrBox, boardBox] = await Promise.all([qr.boundingBox(), leaderboard.boundingBox()]);
+  expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(boardBox!.x);
+  await testInfo.attach("display idle", { body: await display.screenshot(), contentType: "image/png" });
+
+  await display.setViewportSize({ width: 390, height: 844 });
+  const [narrowQr, narrowBoard] = await Promise.all([qr.boundingBox(), leaderboard.boundingBox()]);
+  expect(narrowBoard!.y).toBeGreaterThan(narrowQr!.y + narrowQr!.height);
+  const [content, available] = await display.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+  expect(content).toBeLessThanOrEqual(available);
+});

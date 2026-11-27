@@ -14,8 +14,10 @@ npm run db:migrate
 npm run dev
 ```
 
-Open `/operator` to start a session, then open `/` on each device and enter the join code.
-In a quiz session, the operator enters both names and starts the match once both players are connected.
+Open `/new` on the screen that will be the display to start a session. The idle display shows a QR code
+(and the short code) that opens `/join/<code>` on a guest's phone. Guests enter only their name, the server
+gives them a free slot, and they press Ready. When every slot is Ready, a countdown runs on every device and
+the round starts. When a round ends the slots are freed, so the next guests can scan the same display.
 
 ## Quiz content
 
@@ -81,10 +83,12 @@ for that round. Confirming a round refreshes results on connected budget devices
 - No server timer opens the next question. Its opening time is saved when the previous one closes,
   and each device asks for a new snapshot at that moment.
 - The correct choice never leaves the server.
-- The operator can stop a running match. Player devices check in while a match is running. Once a
+- The display can stop a running match. Player devices check in while a match is running. Once a
   player's deadline expires, the next station request discards the match and the display briefly explains why it stopped.
 - The leaderboard ranks both players from every completed quiz match across sessions. Equal scores
-  share a rank, and everyone tied at tenth appears.
+  share a rank, and everyone tied at the last place appears. Its size is `leaderboardSize` in `content/quiz.json` (default 10).
+- `countdownSeconds` (default 3) is the countdown before a round; `abandonSeconds` (default 60) is how long a seat
+  that is not Ready and not connected is kept before another guest may take it. `content/budget.json` has both too.
 
 Known limits:
 

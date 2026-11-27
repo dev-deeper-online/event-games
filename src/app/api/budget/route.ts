@@ -1,6 +1,5 @@
 import { publishBudgetResultsChanged, publishChanged } from "@/lib/ably";
-import { saveBudgetAllocations, startBudgetRound } from "@/lib/budget";
-import { maxNameLength } from "@/lib/protocol";
+import { saveBudgetAllocations } from "@/lib/budget";
 import { authenticate } from "@/lib/sessions";
 
 const roundIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,22 +10,8 @@ export async function POST(request: Request) {
   if (device.gameType !== "budget") return Response.json({ error: "This is not a budget session." }, { status: 403 });
 
   const body = await request.json().catch(() => null);
-  if (body?.action === "start") {
-    if (device.role !== "operator") {
-      return Response.json({ error: "Only the operator can start a budget round." }, { status: 403 });
-    }
-    const name = typeof body.playerName === "string" ? body.playerName.trim() : "";
-    if (!name || name.length > maxNameLength) {
-      return Response.json({ error: `Enter a player name up to ${maxNameLength} characters.` }, { status: 400 });
-    }
-    if (!await startBudgetRound(device.sessionId, name)) {
-      return Response.json({ error: "The player device must join and any active round must finish." }, { status: 409 });
-    }
-    await publishChanged(device.code);
-    return Response.json({}, { status: 201 });
-  }
-
-  if (device.role !== "player1") {
+  // A guest may retry the confirmation that ended its round; the round itself checks the device.
+  if (device.role === "display") {
     return Response.json({ error: "Only the player can change the allocation." }, { status: 403 });
   }
   const action = body?.action;
@@ -40,9 +25,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "Send a valid draft version." }, { status: 400 });
   }
   const refusal = await saveBudgetAllocations(
-    device.sessionId, body.roundId, body.allocations, confirm ? null : body.draftVersion,
+    device, body.roundId, body.allocations, confirm ? null : body.draftVersion, Date.now(),
   );
   if (refusal) return Response.json({ error: refusal.error }, { status: refusal.status });
-  if (confirm) await publishBudgetResultsChanged();
+  // Confirming frees the slot, which every device of the session needs to hear about.
+  if (confirm) await Promise.all([publishChanged(device.code), publishBudgetResultsChanged()]);
   return Response.json({});
 }

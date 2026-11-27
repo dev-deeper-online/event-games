@@ -1,3 +1,4 @@
+import content from "../../content/quiz.json";
 import { db } from "./db";
 import type { LeaderboardEntry } from "./protocol";
 
@@ -17,8 +18,9 @@ export async function eventLeaderboard() {
        select *, rank() over (order by score desc)::int as rank from entries
      )
      select id::text || '/' || slot as id, name, score, rank
-     from ranked where rank <= 10
+     from ranked where rank <= $1
      order by rank, ranked.id, slot`,
+    [content.leaderboardSize ?? 10],
   );
   return rows;
 }

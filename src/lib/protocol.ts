@@ -14,15 +14,14 @@ export const playerSlots: Record<GameType, readonly PlayerRole[]> = {
 
 export const isPlayer = (role: Role): role is PlayerRole => role === "player1" || role === "player2";
 
-export const joinableRoles = ["display", "player1", "player2"] as const;
-export type JoinableRole = (typeof joinableRoles)[number];
-export type Role = "operator" | JoinableRole;
+/** A guest is a player device whose round has ended. It keeps its token and its own last result. */
+export type Role = "display" | PlayerRole | "guest";
 
 export const roleLabels: Record<Role, string> = {
-  operator: "Operator",
   display: "Display",
   player1: "Player 1",
   player2: "Player 2",
+  guest: "Guest",
 };
 
 export const gameLabels: Record<GameType, string> = { quiz: "Quiz", budget: "Budget" };
@@ -35,7 +34,9 @@ export type Snapshot = {
   gameType: GameType;
   role: Role;
   budgetRound: BudgetRound | null;
-  seats: { role: Role; deviceIds: string[] }[];
+  seats: { role: Role; deviceIds: string[]; name: string | null; ready: boolean }[];
+  /** This device's own registration. A guest uses the name to play again. */
+  me: { name: string | null; ready: boolean };
   /** The quiz station's running or last finished match. */
   match: Match | null;
   stopNotice: { reason: StopReason; remainingMs: number } | null;
@@ -47,24 +48,37 @@ export type Snapshot = {
 export const isQuizDisplay = ({ gameType, role }: Pick<Snapshot, "gameType" | "role">) =>
   gameType === "quiz" && role === "display";
 
-export type StopReason = "operator" | "disconnect";
+export type StopReason = "display" | "disconnect";
 
 export const maxNameLength = 30;
 
 /** Who took a closed question. The correct choice is deliberately never part of it. */
 export type QuestionResult = { scorer: PlayerRole | null; points: number };
 
+/** What happened to one answer. Never says which choice was picked or which was right. */
+export type Outcome = { id: string; player: PlayerRole; kind: "wrong" | "scored"; points?: number };
+
 export type Match = {
   id: string;
   players: Record<PlayerRole, { name: string; score: number }>;
   questionCount: number;
-  question: { number: number; prompt: string; choices: string[] };
 } & (
-  | { phase: "open"; canAnswer: boolean; retryId?: string }
-  /** `nextInMs` is how long until the next question opens; devices fetch a snapshot then. */
-  | { phase: "closed"; result: QuestionResult; nextInMs: number }
-  | { phase: "complete"; result: QuestionResult }
+  /** All players are Ready. `startsInMs` is how long until the first question opens. */
+  | { phase: "countdown"; startsInMs: number }
+  | ({
+      question: { number: number; prompt: string; choices: string[] };
+      /** Every answer to the shown question in the order it arrived, so a skipped snapshot loses nothing. */
+      outcomes: Outcome[];
+    } & (
+      | { phase: "open"; canAnswer: boolean; retryId?: string }
+      /** `nextInMs` is how long until the next question opens; devices fetch a snapshot then. */
+      | { phase: "closed"; result: QuestionResult; nextInMs: number }
+      | { phase: "complete"; result: QuestionResult }
+    ))
 );
+
+/** A match whose first question has opened. */
+export type ShownMatch = Exclude<Match, { phase: "countdown" }>;
 
 /** A device token the joining browser makes up itself: 32 random bytes as hex. */
 export const deviceTokenPattern = /^[0-9a-f]{64}$/;
